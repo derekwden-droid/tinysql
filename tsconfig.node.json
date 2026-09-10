@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "//": "Node-only view of the engine + CLI. Kept standalone (not a project reference) so `tsc --noEmit` stays a single fast pass; run it with `npx tsc -p tsconfig.node.json` to prove the engine has no DOM dependency.",
+  "include": ["src/cli", "src/engine"]
+}

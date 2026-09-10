@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TinySQL — SQL engine with a visible query planner</title>
+    <meta
+      name="description"
+      content="A from-scratch SQL engine in TypeScript. Write a query, watch the planner choose between a sequential scan and an index."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          TinySQL
+          <span class="tag">query planner</span>
+        </div>
+        <nav class="datasets" id="dataset-buttons" aria-label="Sample queries"></nav>
+        <div class="topbar-actions">
+          <button type="button" id="load-csv">Load CSV…</button>
+          <input type="file" id="file-input" accept=".csv,text/csv" multiple hidden />
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="panel panel-schema" aria-label="Schema">
+          <div class="panel-head"><h2>Schema</h2></div>
+          <div id="schema-panel" class="panel-body"></div>
+        </aside>
+
+        <section class="center">
+          <div class="pane pane-editor">
+            <div class="pane-head">
+              <h2>Editor</h2>
+              <div class="pane-actions">
+                <button type="button" id="explain-btn">Explain</button>
+                <button type="button" id="run-btn" class="primary">
+                  Run <kbd class="run-hint" id="run-hint">Ctrl ↵</kbd>
+                </button>
+              </div>
+            </div>
+            <div id="editor" class="editor-host"></div>
+            <p id="editor-error" class="editor-error" role="alert" hidden></p>
+          </div>
+
+          <div class="pane pane-results">
+            <div class="pane-head">
+              <h2>Results</h2>
+              <span id="results-note" class="pane-note"></span>
+            </div>
+            <div id="results" class="results" tabindex="0"></div>
+            <div id="status" class="statusbar" role="status"></div>
+          </div>
+        </section>
+
+        <aside class="panel panel-plan" aria-label="Query plan">
+          <div class="panel-head"><h2>Plan</h2></div>
+          <div id="plan-panel" class="panel-body"></div>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
