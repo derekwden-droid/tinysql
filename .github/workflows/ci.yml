@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # `npm run build` runs `tsc --noEmit` first, so this typechecks too.
+      - run: npm test
+      - run: npm run build
+
+      # Prove the engine carries no DOM dependency.
+      - run: npx tsc --noEmit -p tsconfig.node.json
+
+      - name: Check the CLI runs against the bundled data
+        run: |
+          npm run cli --silent -- \
+            --file public/datasets/employees.csv \
+            --file public/datasets/departments.csv \
+            --query "SELECT e.name AS employee, d.name AS department FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.dept_id = 3" \
+            | tee /tmp/cli.out
+          grep -q "Ada Lovelace" /tmp/cli.out
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy to Pages
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

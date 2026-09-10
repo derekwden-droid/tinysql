@@ -1,6 +1,9 @@
 # TinySQL
 
+[![CI](https://github.com/derekwden-droid/tinysql/actions/workflows/ci.yml/badge.svg)](https://github.com/derekwden-droid/tinysql/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+**[Live demo →](https://derekwden-droid.github.io/tinysql/)**
 
 A from-scratch SQL engine in TypeScript with a visible query planner. You write a query, and the
 right-hand panel shows the plan the engine actually ran — which table it scanned, where it used an
