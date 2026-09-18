@@ -22,10 +22,11 @@ npm install
 npm run dev
 ```
 
-Then open the printed URL. Three datasets load on their own.
+Then open the printed URL. Three datasets load on their own, and on a first visit the sample query
+runs too, so the first screen already has a plan to read.
 
 ```bash
-npm test          # 103 tests
+npm test          # 110 tests
 npm run build     # static site in dist/
 ```
 
@@ -52,24 +53,29 @@ Add `--explain` to see the plan instead of the rows. `npm run cli -- --help` lis
 
 ## Try this
 
-Run it, look at the plan, then run it again after creating the index:
+Open the demo. The sample join has already run, and its plan shows a `SeqScan` of `employees`
+feeding the join. Press **Create index and rerun** above the plan: the scan becomes an
+`IndexLookup`, and the status bar reads `71 rows touched (was 108)`. Same seven rows, less work.
+
+That button appears whenever an index would change the plan, and it names that index. The planner
+works it out by reading its own index rule backwards (see [ARCHITECTURE.md](ARCHITECTURE.md)), and
+a test checks, across filter, join, `DISTINCT` and `LIMIT` shapes, that taking the suggestion really
+produces the lookup. To do it by hand, run
 
 ```sql
 EXPLAIN SELECT e.name AS employee, d.name AS department
 FROM employees e
 JOIN departments d ON e.dept_id = d.id
 WHERE e.dept_id = 3;
-
-CREATE INDEX emp_dept ON employees (dept_id);
 ```
 
-The `SeqScan` under the join becomes an `IndexLookup`. Note the aliases on the output columns —
-without them the result would have two columns both called `name`.
+then `CREATE INDEX emp_dept ON employees (dept_id);`, then the `EXPLAIN` again. Note the aliases on
+the output columns — without them the result would have two columns both called `name`.
 
-Forty rows are too few to feel. Press **Generate 50k orders** in the schema panel, query
-`WHERE employee_id = 17`, then add the index and run it again: on this machine that is 19.6 ms and
-50,000 rows touched before, 2.8 ms and 1,149 rows touched after. Same answer, less work — which is
-the entire point of a planner.
+Forty rows are too few to feel. Press **Generate 50k orders** in the schema panel, run the query it
+writes, then **Create index and rerun**: on this machine that is 14.4 ms and 50,000 rows touched
+before, 2.6 ms and 1,149 rows touched after. Same answer, less work — which is the entire point of a
+planner.
 
 ## How it fits together
 

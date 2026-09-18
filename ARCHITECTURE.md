@@ -61,6 +61,13 @@ same rows. `HashIndex` keys are therefore tagged by runtime type (`n:`, `t:`, `b
 declared type, so `1` and `1.0` share a bucket while `1` and `'1'` do not. `tests/executor.test.ts`
 enforces this as a property over every column and probe value.
 
+**Read backwards.** `suggestIndex(plan)` inverts step 4 for the UI. A pushed `col = literal` left in a
+`Filter` directly above a `SeqScan` is there only because no index matched, so indexing that column is
+exactly what turns the scan into a lookup. The plan panel offers it as **Create index and rerun**,
+which reruns only the script's last statement, so the index is the one thing that changed.
+`tests/planner.test.ts` checks, across filter, join, `DISTINCT` and `LIMIT` shapes, that taking the
+suggestion produces that `IndexLookup`.
+
 ## Estimates
 
 Crude and documented, shown in the UI beside the actual counts:
