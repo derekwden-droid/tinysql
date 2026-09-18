@@ -305,6 +305,70 @@ describe("index and scan must return the same answer", () => {
   });
 });
 
+describe("a join probe must return what a rescanning join returns", () => {
+  const script = `
+    CREATE TABLE o (id INTEGER, k INTEGER, r REAL, s TEXT);
+    INSERT INTO o (id, k, r, s) VALUES
+      (1, 1,    1.0,  '1'),
+      (2, 2,    2.5,  'b'),
+      (3, NULL, NULL, NULL),
+      (4, 1,    1.5,  'a'),
+      (5, 9,    9.0,  'zz');
+    CREATE TABLE i (id INTEGER, k INTEGER, r REAL, s TEXT, tag TEXT);
+    INSERT INTO i (id, k, r, s, tag) VALUES
+      (10, 1,    1.0,  '1',  'x'),
+      (11, 1,    1.0,  'a',  'y'),
+      (12, 2,    2.5,  'b',  'x'),
+      (13, NULL, NULL, NULL, 'z'),
+      (14, 3,    1.5,  '1',  'y');
+  `;
+
+  // Every outer column against every inner column: same type, INTEGER against
+  // REAL (where 1 = 1.0), and cross-type pairs that must never match.
+  const pairs = ["k", "r", "s"].flatMap((a) => ["k", "r", "s"].map((b) => [a, b] as const));
+  const queries = (a: string, b: string): string[] => [
+    `SELECT o.id AS o_id, i.id AS i_id FROM o JOIN i ON o.${a} = i.${b};`,
+    `SELECT o.id AS o_id, i.id AS i_id FROM o JOIN i ON i.${b} = o.${a};`,
+    `SELECT o.id AS o_id, i.id AS i_id FROM o JOIN i ON o.${a} = i.${b} WHERE i.tag = 'x';`,
+    `SELECT o.id AS o_id, i.tag AS tag FROM o JOIN i ON o.${a} = i.${b} WHERE o.id > 1 AND i.tag != 'y';`,
+    `SELECT o.id AS o_id, i.id AS i_id FROM o JOIN i ON o.${a} = i.${b} ORDER BY i.id DESC LIMIT 2;`,
+    `SELECT DISTINCT i.tag AS tag FROM o JOIN i ON o.${a} = i.${b};`,
+  ];
+
+  it("agrees for every column pair and query shape", () => {
+    let probed = 0;
+    let checked = 0;
+    for (const [a, b] of pairs) {
+      const withIndex = catalogWith(script);
+      run(`CREATE INDEX i_${b} ON i (${b});`, withIndex);
+      const withoutIndex = catalogWith(script);
+      for (const sql of queries(a, b)) {
+        const probe = run(sql, withIndex);
+        const scan = run(sql, withoutIndex);
+        expect(JSON.stringify(probe.rows), `${sql} disagreed`).toBe(JSON.stringify(scan.rows));
+        checked++;
+        if (probe.stats.indexesUsed.includes(`i_${b}`)) probed++;
+      }
+    }
+    // Guard against a vacuous pass: every indexed query must really have probed.
+    expect(probed).toBe(checked);
+  });
+
+  it("reads only the inner rows each key finds", () => {
+    const catalog = catalogWith(script);
+    const sql = "SELECT o.id AS o_id, i.id AS i_id FROM o JOIN i ON o.k = i.k;";
+    const scan = run(sql, catalog);
+    run("CREATE INDEX i_k ON i (k);", catalog);
+    const probe = run(sql, catalog);
+    // Rescanning: 5 outer rows, 5 inner rows buffered once, 5 x 5 inner visits.
+    expect(scan.stats.rowsTouched).toBe(35);
+    // Probing: 5 outer rows, then only what each key finds: k = 1 finds 2 rows
+    // (twice), k = 2 finds 1, k = 9 finds none, and NULL is never probed.
+    expect(probe.stats.rowsTouched).toBe(10);
+    expect(probe.rows).toEqual(scan.rows);
+  });
+});
+
 describe("DML errors", () => {
   it("rejects a value of the wrong type", () => {
     const catalog = catalogWith("CREATE TABLE t (i INTEGER);");
