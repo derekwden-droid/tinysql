@@ -26,7 +26,7 @@ Then open the printed URL. Three datasets load on their own, and on a first visi
 runs too, so the first screen already has a plan to read.
 
 ```bash
-npm test          # 110 tests
+npm test          # 117 tests
 npm run build     # static site in dist/
 ```
 
@@ -113,7 +113,12 @@ The planner uses an index when all of the following hold:
    pushdown, an index could never fire in a join query.
 
 The remaining conjuncts stay in a `Filter`: single-relation ones directly above that relation's scan,
-join-spanning ones above the join. At most one `IndexLookup` per relation.
+join-spanning ones above the join. At most one `IndexLookup` per relation, and at most one index per
+column: a second `CREATE INDEX` on an indexed column is an error.
+
+This is a rule, not a cost model. The estimates in the plan view are there to compare against the
+actual counts; they never decide anything. The index rule also covers `WHERE` only: a join always
+runs as a nested loop, even when its inner column is indexed.
 
 `tests/planner.test.ts` asserts on the serialized plan tree, and `tests/executor.test.ts` runs every
 probe value against both an indexed and an unindexed catalog and requires identical rows. An index
@@ -136,8 +141,8 @@ SELECT [DISTINCT] items
 EXPLAIN SELECT ...;
 ```
 
-- **Types:** `INTEGER`, `REAL`, `TEXT`, `BOOLEAN`, `NULL`. CSV import infers INTEGER / REAL / TEXT;
-  an empty cell is NULL.
+- **Types:** `INTEGER`, `REAL`, `TEXT`, `BOOLEAN`, `NULL`. CSV import infers INTEGER / REAL / TEXT
+  from every cell, not a sample; an empty cell is NULL.
 - **Select items:** `*`, `table.*`, `col`, `table.col`, `expr AS alias`. `FROM` is optional, so
   `SELECT 1 AS n` works.
 - **Operators:** `= != <> < <= > >= AND OR NOT`, parentheses, `IS NULL`, `IS NOT NULL`, `LIKE` with
@@ -155,6 +160,8 @@ These are decisions, not accidents, and each one has a test:
 - Values of different types are **never equal**. `1 = '1'` is FALSE. When ordered, types rank
   `null < boolean < number < text`.
 - `1` and `1.0` are the same value.
+- **Declared types hold for every stored value.** `1.5` in an INTEGER column is an error; `2.0` is
+  accepted, because it is `2`. The check sits in the catalog, so INSERT and CSV import obey it alike.
 - **Three-valued logic everywhere.** Any comparison or `LIKE` with a NULL operand is UNKNOWN.
   `WHERE` keeps TRUE only, so both `dept_id = 3` and `dept_id != 3` exclude a NULL `dept_id`.
 - `DISTINCT` treats two NULLs as duplicates of each other — the opposite of `=`, and what SQL says.
