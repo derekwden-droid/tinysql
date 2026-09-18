@@ -75,7 +75,9 @@ probing join must return exactly what a rescanning join returns.
 **Read backwards.** `suggestIndex(plan)` inverts steps 4 and 5 for the UI. A pushed `col = literal`
 left in a `Filter` directly above a `SeqScan` is there only because no index matched, so indexing that
 column is exactly what turns the scan into a lookup; likewise a join whose inner side still scans names
-its inner join column. `WHERE` suggestions come first. The plan panel offers each as **Create index
+its inner join column. Rule 5 and the suggestion find that inner scan with the same helper,
+`innerScan`, so the button cannot promise a change the planner would not make. `WHERE` suggestions
+come first. The plan panel offers each as **Create index
 and rerun**, which reruns only the script's last statement, so the index is the one thing that
 changed. `tests/planner.test.ts` takes suggestions one after another across filter, join, `DISTINCT`
 and `LIMIT` shapes, and checks that each produces its `IndexLookup` and that they run out.
@@ -112,8 +114,9 @@ Derived nodes report `actualRows` only. The plan view marks whichever node read 
 
 - Every node is a generator, so `Limit` short-circuits instead of materialising the whole result.
 - `NestedLoopJoin` materialises its inner side once and rescans it per outer row, unless the inner
-  side is a join probe. Then it runs the inner side once per outer row with that row as the key,
-  skips outer rows whose key is NULL, and still re-checks `=`, so the index never decides the answer.
+  side is a join probe. Then it compiles that side once into a function of the outer row (index
+  resolved, inner `Filter` captured), calls it per outer row, skips outer rows whose key is NULL,
+  and still re-checks `=`, so the index never decides the answer.
 - `Sort` and `Distinct` buffer, by necessity. `Distinct` keys each row with `encodeRowKey`, the row
   form of the index's `encodeKey`. The shared encoding is why two NULLs collapse into one, and the
   JSON around the per-column keys means no text value can forge a column boundary.
