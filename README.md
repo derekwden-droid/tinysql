@@ -26,7 +26,7 @@ Then open the printed URL. Three datasets load on their own, and on a first visi
 runs too, so the first screen already has a plan to read.
 
 ```bash
-npm test          # 117 tests
+npm test          # 124 tests
 npm run build     # static site in dist/
 ```
 
@@ -55,10 +55,13 @@ Add `--explain` to see the plan instead of the rows. `npm run cli -- --help` lis
 
 Open the demo. The sample join has already run, and its plan shows a `SeqScan` of `employees`
 feeding the join. Press **Create index and rerun** above the plan: the scan becomes an
-`IndexLookup`, and the status bar reads `71 rows touched (was 108)`. Same seven rows, less work.
+`IndexLookup`, and the status bar reads `71 rows touched (was 108)`. Press it again and the join gets
+an index too. Instead of rereading all of `departments` for every employee, it probes an index on
+`departments.id` with each one, and the count drops to `14 rows touched (was 71)`. Same seven rows
+every time, less work.
 
 That button appears whenever an index would change the plan, and it names that index. The planner
-works it out by reading its own index rule backwards (see [ARCHITECTURE.md](ARCHITECTURE.md)), and
+works it out by reading its own index rules backwards (see [ARCHITECTURE.md](ARCHITECTURE.md)), and
 a test checks, across filter, join, `DISTINCT` and `LIMIT` shapes, that taking the suggestion really
 produces the lookup. To do it by hand, run
 
@@ -116,9 +119,15 @@ The remaining conjuncts stay in a `Filter`: single-relation ones directly above 
 join-spanning ones above the join. At most one `IndexLookup` per relation, and at most one index per
 column: a second `CREATE INDEX` on an indexed column is an error.
 
-This is a rule, not a cost model. The estimates in the plan view are there to compare against the
-actual counts; they never decide anything. The index rule also covers `WHERE` only: a join always
-runs as a nested loop, even when its inner column is indexed.
+Joins get the same idea on their inner side. Normally the `JOIN` table is read once and then
+rescanned for every outer row. If that side would scan its whole table and its join column has an
+index, the planner probes the index with each outer row's key instead, an index nested loop:
+`IndexLookup(departments AS d using dept_id on id = e.dept_id)`. A `WHERE` lookup on that side still
+wins, because it runs once rather than once per outer row, and only the `JOIN` table is ever probed:
+the planner does not reorder a join to reach an index on the `FROM` table.
+
+These are rules, not a cost model. The estimates in the plan view are there to compare against the
+actual counts; they never decide anything.
 
 `tests/planner.test.ts` asserts on the serialized plan tree, and `tests/executor.test.ts` runs every
 probe value against both an indexed and an unindexed catalog and requires identical rows. An index
