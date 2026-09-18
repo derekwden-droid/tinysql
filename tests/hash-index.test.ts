@@ -95,4 +95,11 @@ describe("index maintenance", () => {
     expect(() => run("CREATE INDEX t_k ON t (s);", catalog)).toThrow(/already exists/);
     expect(() => run("CREATE INDEX t_nope ON t (missing);", catalog)).toThrow(/no such column/);
   });
+
+  it("rejects a second index on an already-indexed column", () => {
+    const catalog = seeded();
+    run("CREATE INDEX t_k ON t (k);", catalog);
+    expect(() => run("CREATE INDEX t_k2 ON t (k);", catalog)).toThrow("t.k is already indexed by 't_k'");
+    expect(catalog.indexNames()).toEqual(["t_k"]);
+  });
 });

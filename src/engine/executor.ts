@@ -202,9 +202,11 @@ function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
 
     case "IndexLookup": {
       const table = ctx.catalog.getTable(node.table);
-      const index = ctx.catalog.findIndex(node.table, node.column);
-      if (index === undefined) {
-        throw new ExecError(`index '${node.index}' disappeared during execution`);
+      // Run the index the plan names, not whatever a fresh (table, column)
+      // lookup would find: the plan node is the record of what was chosen.
+      const index = ctx.catalog.getIndex(node.index);
+      if (index === undefined || index.table !== node.table || index.column !== node.column) {
+        throw new ExecError(`index '${node.index}' changed between planning and execution`);
       }
       for (const rowId of index.lookup(node.value)) {
         self.rowsTouched++;
