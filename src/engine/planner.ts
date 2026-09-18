@@ -152,6 +152,49 @@ export function explainRows(root: PlanNode): ExplainRow[] {
   return rows;
 }
 
+export interface IndexSuggestion {
+  table: string;
+  column: string;
+}
+
+/**
+ * The index rule read backwards: the index that would turn a scan in this plan
+ * into an IndexLookup. The planner leaves a pushed `col = literal` in a Filter
+ * directly above a SeqScan only because no index matched, so indexing that
+ * column is exactly what flips the plan. First match in plan order, as the
+ * planner itself matches; null when no index would change anything.
+ */
+export function suggestIndex(node: PlanNode): IndexSuggestion | null {
+  if (node.op === "Filter" && node.child.op === "SeqScan") {
+    const scan = node.child;
+    for (const conjunct of flattenAnd(node.predicate)) {
+      const ordinal = equalityProbeOrdinal(conjunct);
+      const column = ordinal === null ? undefined : scan.schema[ordinal];
+      if (column !== undefined) return { table: scan.table, column: column.name };
+    }
+  }
+  for (const child of children(node)) {
+    const found = suggestIndex(child);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function flattenAnd(expr: PExpr): PExpr[] {
+  return expr.kind === "binary" && expr.op === "and"
+    ? [...flattenAnd(expr.left), ...flattenAnd(expr.right)]
+    : [expr];
+}
+
+/** The column side of `col = literal`, in either order; mirrors `asEqualityProbe`. */
+function equalityProbeOrdinal(expr: PExpr): number | null {
+  if (expr.kind !== "binary" || expr.op !== "=") return null;
+  const { left, right } = expr;
+  if (left.kind === "ordinal" && right.kind === "literal" && right.value !== null) return left.index;
+  if (right.kind === "ordinal" && left.kind === "literal" && left.value !== null) return right.index;
+  return null;
+}
+
 // ------------------------------------------------------------------- resolver
 
 interface Relation {
