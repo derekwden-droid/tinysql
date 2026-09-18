@@ -123,17 +123,16 @@ export class Catalog {
     if (ordinal === undefined) {
       throw new ExecError(`no such column: ${tableName}.${column}`);
     }
+    // One index per column: a second would hold identical rows, cost every
+    // INSERT a second update, and leave the planner choosing by creation order.
+    const existing = this.findIndex(tableName, column);
+    if (existing !== undefined) {
+      throw new ExecError(`${tableName}.${column} is already indexed by '${existing.name}'`);
+    }
     const index = HashIndex.build(name, tableName, column, ordinal, table.rows);
     this.indexes.set(name, index);
     this.version++;
     return index;
-  }
-
-  dropIndex(name: string): void {
-    if (!this.indexes.delete(name)) {
-      throw new ExecError(`no such index: ${name}`);
-    }
-    this.version++;
   }
 
   /** The index the planner would use for `table.column = ?`, if one exists. */
