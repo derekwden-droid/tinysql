@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Catalog } from "../src/engine/catalog.js";
 import { run } from "../src/engine/executor.js";
 import { parseOne } from "../src/engine/parser.js";
-import { planSelect, serializePlan } from "../src/engine/planner.js";
+import { planSelect, serializePlan, suggestIndex, type PlanNode } from "../src/engine/planner.js";
 import { PlanningError } from "../src/engine/errors.js";
 
 function seeded(): Catalog {
@@ -165,6 +165,93 @@ describe("planner", () => {
     expect(() =>
       plan("SELECT name FROM employees e JOIN departments d ON e.dept_id = d.id", catalog),
     ).toThrow(/ambiguous column/);
+  });
+});
+
+describe("index suggestions", () => {
+  function tree(sql: string, catalog: Catalog): PlanNode {
+    const stmt = parseOne(sql);
+    if (stmt.kind !== "select") throw new Error("expected a select");
+    return planSelect(stmt, catalog);
+  }
+
+  const SAMPLE_JOIN = `
+    SELECT e.name AS employee, d.name AS department
+    FROM employees e
+    JOIN departments d ON e.dept_id = d.id
+    WHERE e.dept_id = 3`;
+
+  it("names the index the aliased sample join is missing", () => {
+    const catalog = seeded();
+    expect(suggestIndex(tree(SAMPLE_JOIN, catalog))).toEqual({ table: "employees", column: "dept_id" });
+  });
+
+  it("suggests nothing once the plan already uses that index", () => {
+    const catalog = seeded();
+    run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
+    expect(suggestIndex(tree(SAMPLE_JOIN, catalog))).toBeNull();
+  });
+
+  it("suggests nothing for predicates a hash index cannot serve", () => {
+    const catalog = seeded();
+    for (const where of [
+      "salary > 90000",
+      "city LIKE 'T%'",
+      "city IS NULL",
+      "dept_id = NULL",
+      "dept_id = 3 OR dept_id = 1",
+      "NOT dept_id = 3",
+      "dept_id = id",
+    ]) {
+      expect(suggestIndex(tree(`SELECT name FROM employees WHERE ${where}`, catalog)), where).toBeNull();
+    }
+    expect(suggestIndex(tree("SELECT name FROM employees", catalog))).toBeNull();
+  });
+
+  it("suggests nothing for an equality that spans both sides of a join", () => {
+    const catalog = seeded();
+    const sql = "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.id = d.floor";
+    expect(suggestIndex(tree(sql, catalog))).toBeNull();
+  });
+
+  it("follows the planner's first-match order among conjuncts", () => {
+    const catalog = seeded();
+    const sql = "SELECT name FROM employees WHERE salary > 1 AND city = 'Tampa' AND dept_id = 3";
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "employees", column: "city" });
+  });
+
+  it("works through both sides of a join, one index at a time", () => {
+    const catalog = seeded();
+    const sql = `SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id
+                 WHERE e.dept_id = 3 AND d.floor = 3`;
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "employees", column: "dept_id" });
+    run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "departments", column: "floor" });
+    run("CREATE INDEX dept_floor ON departments (floor);", catalog);
+    expect(suggestIndex(tree(sql, catalog))).toBeNull();
+  });
+
+  // The property the UI's "Create index and rerun" button depends on: taking a
+  // suggestion always turns that scan into a lookup on that column.
+  it("always names an index that turns the scan into an IndexLookup", () => {
+    const queries = [
+      "SELECT name FROM employees WHERE dept_id = 3",
+      "SELECT name FROM employees WHERE 3 = dept_id",
+      "SELECT name FROM employees WHERE salary > 1 AND city = 'Tampa' AND dept_id = 3",
+      "SELECT name FROM employees WHERE name = 'Ada' AND 1 = 1",
+      "SELECT name FROM employees WHERE city = 'Tampa' ORDER BY salary DESC LIMIT 2",
+      "SELECT DISTINCT city FROM employees WHERE dept_id = 3",
+      SAMPLE_JOIN,
+      "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.floor = 2",
+      "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > d.floor AND e.city = 'Tampa'",
+    ];
+    for (const sql of queries) {
+      const catalog = seeded();
+      const suggestion = suggestIndex(tree(sql, catalog));
+      expect(suggestion, sql).not.toBeNull();
+      run(`CREATE INDEX probe ON ${suggestion!.table} (${suggestion!.column});`, catalog);
+      expect(plan(sql, catalog), sql).toContain(`using probe on ${suggestion!.column} = `);
+    }
   });
 });
 
