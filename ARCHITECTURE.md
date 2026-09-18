@@ -5,13 +5,15 @@
 ```
 SQL text
   -> lexer.ts      hand-written scanner -> Token[] with start/end/line/column
-  -> parser.ts     recursive descent + a Pratt loop for expressions -> Statement[]
+  -> parser.ts     recursive descent, one method per precedence level -> Statement[]
   -> planner.ts    resolves names against the catalog -> PlanNode tree
   -> executor.ts   interprets the tree with generators -> { columns, rows, stats, plan }
 ```
 
 `catalog.ts` is the only mutable store: tables (`{ def, rows, columnIndex }`) and indexes. Everything
-else is a pure function of its input plus the catalog. Rows are flat `Value[]` addressed by ordinal;
+else is a pure function of its input plus the catalog. It is also the one place values meet declared
+types: `insert` checks every row with `fitsType` before writing any, so INSERT, CSV import and the UI's
+generator all obey the same rule, and `createIndex` allows one index per column. Rows are flat `Value[]` addressed by ordinal;
 the planner resolves every column reference to an ordinal at plan time, so execution never does a
 string lookup in the hot path.
 
@@ -70,7 +72,8 @@ suggestion produces that `IndexLookup`.
 
 ## Estimates
 
-Crude and documented, shown in the UI beside the actual counts:
+Crude and documented, shown in the UI beside the actual counts. The planner is rule-based, so these
+are for comparison only and never decide anything:
 
 | Node             | `estRows`                                             |
 | ---------------- | ----------------------------------------------------- |
@@ -96,6 +99,9 @@ The plan view marks whichever node read the most rows.
 
 - Every node is a generator, so `Limit` short-circuits instead of materialising the whole result.
 - `NestedLoopJoin` materialises its inner side once and rescans it per outer row.
-- `Sort` and `Distinct` buffer, by necessity. `Distinct` hashes rows with the same runtime-tagged
-  encoding the index uses, which is why two NULLs collapse into one.
+- `Sort` and `Distinct` buffer, by necessity. `Distinct` keys each row with `encodeRowKey`, the row
+  form of the index's `encodeKey`. The shared encoding is why two NULLs collapse into one, and the
+  JSON around the per-column keys means no text value can forge a column boundary.
+- `IndexLookup` runs the index its plan node names, not whatever a fresh `(table, column)` lookup
+  would return.
 - Comparisons return `boolean | null`; `null` is UNKNOWN. `WHERE` keeps TRUE only.

@@ -32,9 +32,12 @@ const COLUMN_TYPES: Record<string, SqlType> = {
 };
 
 /**
- * Recursive descent, with a Pratt loop for expressions. No parser generator, and
- * the parser never invents a token: on failure it names what it found and what
- * would have been valid there.
+ * Recursive descent throughout. Expressions use one method per precedence level
+ * (OR, AND, NOT, comparison), each looping for left associativity. The build
+ * spec asked for a Pratt parser; with four levels, a method per level is simpler
+ * to read, so that is what shipped. No parser generator, and the parser never
+ * invents a token: on failure it names what it found and what would have been
+ * valid there.
  */
 class Parser {
   private readonly tokens: Token[];
