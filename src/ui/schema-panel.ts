@@ -33,7 +33,7 @@ export function renderSchema(host: HTMLElement, catalog: Catalog, handlers: Sche
   if (indexes.length === 0) {
     const p = document.createElement("p");
     p.className = "empty-note";
-    p.textContent = "None yet — hover a column and press “index”.";
+    p.textContent = "None yet — press “index” beside a column.";
     host.append(p);
   } else {
     const list = document.createElement("ul");

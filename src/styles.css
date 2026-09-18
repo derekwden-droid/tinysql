@@ -9,6 +9,8 @@
   --good: #3dd68c;
   --warn: #e6b450;
   --bad: #ff6b6b;
+  /* Plan-tree connectors: 3:1 against --bg-2, because they carry structure. */
+  --rail: #646b78;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
@@ -340,17 +342,21 @@ h2 {
   font-size: 10px;
 }
 
+/* Always visible: the scan-vs-index demo starts here, so it cannot hide behind
+   a hover. Quiet until the row is hovered or the button is focused. */
 .mini-btn {
   padding: 1px 6px;
   font-size: 10px;
   font-family: var(--sans);
   border-radius: 3px;
-  opacity: 0;
+  color: var(--muted);
+  background: transparent;
 }
 
 .schema-column:hover .mini-btn,
 .mini-btn:focus-visible {
-  opacity: 1;
+  color: var(--text);
+  background: var(--bg-3);
 }
 
 .badge {
@@ -519,19 +525,79 @@ h2 {
 
 /* ------------------------------------------------------------------- plan */
 
+.plan-suggest {
+  border: 1px solid rgba(122, 162, 255, 0.45);
+  border-radius: var(--radius);
+  background: rgba(122, 162, 255, 0.08);
+  padding: var(--pad);
+  margin-bottom: var(--pad-lg);
+}
+
+.plan-suggest p {
+  margin: 0 0 var(--pad);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.plan-suggest code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.plan-suggest button {
+  width: 100%;
+}
+
 .plan-node {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-3);
   padding: 6px var(--pad);
-  margin-bottom: 6px;
   min-width: 0;
 }
 
-.plan-children {
-  margin: 0 0 0 10px;
-  padding-left: 10px;
-  border-left: 1px solid var(--border);
+/*
+ * Tree connectors, in CSS so a 280px column needs no SVG. A node's single input
+ * stacks directly below it on a short link. A join's two inputs indent and hang
+ * off one rail, each with an elbow; the rail stops at the last input's elbow.
+ * 25px is the gap above a card plus half its operator line: where elbows land.
+ */
+.plan-children > .plan-branch {
+  position: relative;
+  padding-top: 10px;
+}
+
+.plan-children > .plan-branch::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 0;
+  height: 10px;
+  border-left: 1px solid var(--rail);
+}
+
+.plan-children.fork {
+  padding-left: 24px;
+}
+
+.plan-children.fork > .plan-branch::before {
+  left: -12px;
+  height: auto;
+  bottom: 0;
+}
+
+.plan-children.fork > .plan-branch:last-child::before {
+  bottom: auto;
+  height: 25px;
+}
+
+.plan-children.fork > .plan-branch::after {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 25px;
+  width: 12px;
+  border-top: 1px solid var(--rail);
 }
 
 .plan-op {

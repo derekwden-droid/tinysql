@@ -16,7 +16,8 @@ const DATASETS = ["employees", "departments", "orders"] as const;
 const LARGE_TABLE = "orders_big";
 const LARGE_ROWS = 50_000;
 
-const WELCOME = `-- Three tables are loaded. Run this (Ctrl/Cmd + Enter):
+const WELCOME = `-- This ran on load: the plan panel shows it reading every row of employees.
+-- Press "Create index and rerun" there and watch the plan switch to an index.
 SELECT e.name AS employee, d.name AS department, e.salary
 FROM employees e
 JOIN departments d ON e.dept_id = d.id
@@ -39,8 +40,9 @@ ORDER BY e.salary DESC;`,
   },
   {
     label: "Scan vs index",
-    sql: `-- Run this, note "rows touched" in the status bar and the plan on the right.
--- Then press "index" beside employees.dept_id and run it again.
+    sql: `-- EXPLAIN shows the plan without running it. With no index on
+-- employees.dept_id a SeqScan feeds the join; "Create index and rerun" in the
+-- plan panel turns it into an IndexLookup. Reload the page to drop indexes.
 EXPLAIN SELECT e.name AS employee, d.name AS department
 FROM employees e
 JOIN departments d ON e.dept_id = d.id
@@ -108,8 +110,9 @@ export async function start(): Promise<void> {
 
   if (navigator.userAgent.includes("Mac")) elements.runHint.textContent = "⌘ ↵";
 
+  const storedQuery = readStoredQuery();
   const editor: EditorHandle = createEditor(elements.editorHost, {
-    initialDoc: readStoredQuery() ?? WELCOME,
+    initialDoc: storedQuery ?? WELCOME,
     onRun: () => execute(editor.getValue()),
     onExplain: () => explain(),
     onChange: (doc) => {
@@ -127,13 +130,13 @@ export async function start(): Promise<void> {
       execute(editor.getValue());
     },
     onCreateIndex(table, column) {
-      execute(`CREATE INDEX ${table}_${column} ON ${table} (${column});`);
+      execute(createIndexSql(table, column));
     },
     onGenerateLarge() {
       generateLargeTable(catalog);
       refreshSchema();
-      editor.setValue(`-- ${LARGE_ROWS.toLocaleString("en-US")} rows. Run this, then press "index"
--- beside ${LARGE_TABLE}.employee_id and run it again.
+      editor.setValue(`-- ${LARGE_ROWS.toLocaleString("en-US")} rows. Run this, then press "Create index and rerun"
+-- in the plan panel and compare the time and the rows touched.
 SELECT id, amount, placed_at
 FROM ${LARGE_TABLE}
 WHERE employee_id = 17
@@ -170,14 +173,16 @@ LIMIT 20;`);
     editor.clearError();
   }
 
-  function execute(sql: string): void {
+  function execute(sql: string, baseline?: number): void {
     clearError();
     try {
       const result = run(sql, catalog);
       lastResult = result;
       renderResults(elements.results, result);
-      renderPlan(elements.plan, result.plan ?? null, result.nodeStats ?? null);
-      renderStatus(elements.status, result, null);
+      renderPlan(elements.plan, result.plan ?? null, result.nodeStats ?? null, (table, column) =>
+        indexAndRerun(table, column, sql, result),
+      );
+      renderStatus(elements.status, result, null, baseline);
       elements.resultsNote.textContent = result.explained === true ? "query plan" : "";
       elements.results.scrollTop = 0;
       refreshSchema();
@@ -188,6 +193,25 @@ LIMIT 20;`);
       renderResults(elements.results, null);
       elements.resultsNote.textContent = "";
     }
+  }
+
+  /**
+   * The plan panel's one-click lesson: add the index the planner is missing,
+   * then rerun only the statement that drew the plan, so the index is the one
+   * thing that changed. Earlier statements in a script (CREATE TABLE, INSERT)
+   * would fail or duplicate rows if they ran twice.
+   */
+  function indexAndRerun(table: string, column: string, sql: string, before: QueryResult): void {
+    if (catalog.findIndex(table, column) === undefined) {
+      try {
+        run(createIndexSql(table, column), catalog);
+      } catch (e) {
+        // No position: the error is in generated SQL, not in the editor text.
+        showError(isTinysqlError(e) ? e.format() : formatError(e));
+        return;
+      }
+    }
+    execute(lastStatement(sql), before.explained === true ? undefined : before.stats.rowsTouched);
   }
 
   /**
@@ -255,7 +279,8 @@ LIMIT 20;`);
     }
   }
 
-  // Boot: load the bundled datasets, then render whatever the editor holds.
+  // Boot: load the bundled datasets, then show whatever the editor holds.
+  let booted = true;
   try {
     await Promise.all(
       DATASETS.map(async (name) => {
@@ -265,13 +290,22 @@ LIMIT 20;`);
       }),
     );
   } catch (e) {
+    booted = false;
     showError(formatError(e));
   }
 
   refreshSchema();
-  renderResults(elements.results, lastResult);
-  renderPlan(elements.plan, null, null);
-  renderStatus(elements.status, null, null);
+  if (booted && storedQuery === null) {
+    // First visit: run the sample, so the first screen already has a plan to
+    // read. A restored query is left for the user to run: it may be half-edited,
+    // and a parse error is a worse greeting than an empty panel.
+    execute(editor.getValue());
+  } else {
+    renderResults(elements.results, lastResult);
+    renderPlan(elements.plan, null, null);
+    // After a failed load, keep the error that showError put in the status line.
+    if (booted) renderStatus(elements.status, null, null);
+  }
   editor.focus();
 }
 
@@ -282,6 +316,29 @@ function readStoredQuery(): string | null {
   } catch {
     return null;
   }
+}
+
+/** The last statement of a script: the one whose plan is on screen. */
+function lastStatement(sql: string): string {
+  try {
+    const statements = parse(sql);
+    const last = statements[statements.length - 1];
+    return last === undefined ? sql : sql.slice(last.span.start);
+  } catch {
+    return sql;
+  }
+}
+
+/**
+ * Identifiers are double-quoted so a table created with a quoted, mixed-case
+ * name still resolves; for ordinary lowercase names the quotes change nothing.
+ */
+function createIndexSql(table: string, column: string): string {
+  return `CREATE INDEX ${quoteIdent(`${table}_${column}`)} ON ${quoteIdent(table)} (${quoteIdent(column)});`;
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 /**
