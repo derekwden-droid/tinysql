@@ -1,6 +1,6 @@
 import { ExecError, PlanningError } from "./errors.js";
 import { parse } from "./parser.js";
-import { encodeRowKey } from "./hash-index.js";
+import { encodeRowKey, type HashIndex } from "./hash-index.js";
 import {
   children,
   explainRows,
@@ -185,11 +185,55 @@ function probesOuter(node: PlanNode): boolean {
   return node.op === "Filter" && probesOuter(node.child);
 }
 
+type IndexLookupNode = Extract<PlanNode, { op: "IndexLookup" }>;
+
 /**
- * `outer` is the current outer row when this node sits on the inner side of an
- * index nested loop; a join probe reads its key from it.
+ * The index an IndexLookup names. Run exactly that one, not whatever a fresh
+ * (table, column) lookup would find: the plan node records what was chosen.
  */
-function* execNode(node: PlanNode, ctx: ExecContext, outer?: Row): Generator<Row> {
+function indexOf(node: IndexLookupNode, ctx: ExecContext): HashIndex {
+  const index = ctx.catalog.getIndex(node.index);
+  if (index === undefined || index.table !== node.table || index.column !== node.column) {
+    throw new ExecError(`index '${node.index}' changed between planning and execution`);
+  }
+  return index;
+}
+
+/**
+ * A join's inner side, compiled once per join into a function of the outer
+ * row: the index is resolved and the Filter's predicate captured up front, so
+ * each outer row costs one hash lookup rather than a fresh generator chain.
+ */
+function compileProbe(node: PlanNode, ctx: ExecContext): (outer: Row) => Row[] {
+  const self = statsFor(ctx, node.id);
+  if (node.op === "Filter") {
+    const inner = compileProbe(node.child, ctx);
+    return (outer) => {
+      const kept: Row[] = [];
+      for (const row of inner(outer)) {
+        if (isTrue(asBool3(evaluate(node.predicate, row)))) {
+          self.actualRows++;
+          kept.push(row);
+        }
+      }
+      return kept;
+    };
+  }
+  if (node.op !== "IndexLookup" || node.probe.kind !== "outer") {
+    throw new ExecError(`internal: ${node.op} is not a join probe`);
+  }
+  const rows = ctx.catalog.getTable(node.table).rows;
+  const index = indexOf(node, ctx);
+  const ordinal = node.probe.ordinal;
+  return (outer) => {
+    const ids = index.lookup(outer[ordinal] ?? null);
+    self.rowsTouched += ids.length;
+    self.actualRows += ids.length;
+    return ids.map((id) => rows[id]!);
+  };
+}
+
+function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
   const self = statsFor(ctx, node.id);
 
   switch (node.op) {
@@ -204,23 +248,11 @@ function* execNode(node: PlanNode, ctx: ExecContext, outer?: Row): Generator<Row
     }
 
     case "IndexLookup": {
+      if (node.probe.kind === "outer") {
+        throw new ExecError(`internal: join probe on '${node.index}' ran outside its join`);
+      }
       const table = ctx.catalog.getTable(node.table);
-      // Run the index the plan names, not whatever a fresh (table, column)
-      // lookup would find: the plan node is the record of what was chosen.
-      const index = ctx.catalog.getIndex(node.index);
-      if (index === undefined || index.table !== node.table || index.column !== node.column) {
-        throw new ExecError(`index '${node.index}' changed between planning and execution`);
-      }
-      let key: Value;
-      if (node.probe.kind === "literal") {
-        key = node.probe.value;
-      } else {
-        if (outer === undefined) {
-          throw new ExecError(`join probe on '${node.index}' ran without an outer row`);
-        }
-        key = outer[node.probe.ordinal] ?? null;
-      }
-      for (const rowId of index.lookup(key)) {
+      for (const rowId of indexOf(node, ctx).lookup(node.probe.value)) {
         self.rowsTouched++;
         self.actualRows++;
         yield table.rows[rowId]!;
@@ -229,7 +261,7 @@ function* execNode(node: PlanNode, ctx: ExecContext, outer?: Row): Generator<Row
     }
 
     case "Filter": {
-      for (const row of execNode(node.child, ctx, outer)) {
+      for (const row of execNode(node.child, ctx)) {
         if (isTrue(asBool3(evaluate(node.predicate, row)))) {
           self.actualRows++;
           yield row;
@@ -240,13 +272,14 @@ function* execNode(node: PlanNode, ctx: ExecContext, outer?: Row): Generator<Row
 
     case "NestedLoopJoin": {
       if (probesOuter(node.right)) {
-        // Index nested loop: run the inner side once per outer row, keyed by
+        // Index nested loop: probe the inner side once per outer row, keyed by
         // that row. Its rows are counted where they are read, at the lookup;
         // this node reads nothing itself.
+        const probe = compileProbe(node.right, ctx);
         for (const outerRow of execNode(node.left, ctx)) {
           const key = outerRow[node.leftCol] ?? null;
           if (key === null) continue;
-          for (const row of execNode(node.right, ctx, outerRow)) {
+          for (const row of probe(outerRow)) {
             // Re-check `=`: the index narrows the rows, it never decides the answer.
             if (valuesEqual(key, row[node.rightCol] ?? null)) {
               self.actualRows++;
