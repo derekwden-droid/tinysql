@@ -22,6 +22,16 @@ export function encodeKey(value: Value): string | null {
   }
 }
 
+/**
+ * The row form of `encodeKey`, for DISTINCT: the same equality (`1` and `1.0`
+ * are one value, two NULLs are duplicates) extended to whole rows. JSON quotes
+ * and escapes every key, so no value can forge a boundary between columns, as
+ * text containing a delimiter could when keys were joined with one.
+ */
+export function encodeRowKey(row: readonly Value[]): string {
+  return JSON.stringify(row.map(encodeKey));
+}
+
 export class HashIndex {
   readonly name: string;
   readonly table: string;

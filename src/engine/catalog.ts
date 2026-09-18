@@ -162,7 +162,8 @@ export class Catalog {
    * estimates; memoised against the mutation counter.
    */
   distinctCount(tableName: string, column: string): number {
-    const key = `${this.version}\u0000${tableName}\u0000${column}`;
+    // JSON, not a delimiter: no table or column name can forge a separator.
+    const key = JSON.stringify([this.version, tableName, column]);
     const cached = this.distinctCache.get(key);
     if (cached !== undefined) return cached;
 
