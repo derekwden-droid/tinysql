@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { Catalog } from "../src/engine/catalog.js";
 import { createTableFromCsv } from "../src/engine/csv.js";
+import { generateLargeTable, LARGE_QUERY } from "../src/engine/demo-data.js";
 import { run } from "../src/engine/executor.js";
-import { serializePlan } from "../src/engine/planner.js";
+import { serializePlan, suggestIndex } from "../src/engine/planner.js";
 
 const DATASETS = ["employees", "departments", "orders"] as const;
 
@@ -131,6 +132,28 @@ describe("the sample join", () => {
     );
     expect(explained.explained).toBe(true);
     expect(explained.rows).toHaveLength(4);
+  });
+
+  it("takes the same two index suggestions in the 50k-row demo, at scale", () => {
+    // Driven the way the "Create index and rerun" button drives it.
+    const catalog = loaded();
+    generateLargeTable(catalog);
+    const counts: number[] = [];
+    const taken: string[] = [];
+    let result = run(LARGE_QUERY, catalog);
+    const answer = result.rows;
+    for (let s = suggestIndex(result.plan!); s !== null; s = suggestIndex(result.plan!)) {
+      counts.push(result.stats.rowsTouched);
+      taken.push(`${s.table}.${s.column} (${s.reason})`);
+      run(`CREATE INDEX ${s.table}_${s.column} ON ${s.table} (${s.column});`, catalog);
+      result = run(LARGE_QUERY, catalog);
+      expect(result.rows).toEqual(answer);
+    }
+    counts.push(result.stats.rowsTouched);
+
+    expect(taken).toEqual(["orders_big.employee_id (filter)", "employees.id (join)"]);
+    expect(counts).toEqual([100_600, 51_749, 2_298]);
+    expect(answer).toHaveLength(20);
   });
 
   it("keeps the answer stable across every dept_id, indexed or not", () => {
