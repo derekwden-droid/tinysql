@@ -9,7 +9,7 @@ import {
   type PExpr,
   type PlanNode,
 } from "./planner.js";
-import { typeRank, type Bool3, type Row, type SqlType, type Value } from "./types.js";
+import { typeRank, type Bool3, type Row, type Value } from "./types.js";
 import type { Catalog } from "./catalog.js";
 import type { Expr, Statement } from "./ast.js";
 
@@ -333,19 +333,6 @@ function constantValue(expr: Expr, table: string): Value {
   return expr.value;
 }
 
-function checkAssignable(value: Value, type: SqlType, column: string): void {
-  if (value === null) return;
-  const ok =
-    (type === "integer" && typeof value === "number") ||
-    (type === "real" && typeof value === "number") ||
-    (type === "text" && typeof value === "string") ||
-    (type === "boolean" && typeof value === "boolean") ||
-    type === "null";
-  if (!ok) {
-    throw new ExecError(`cannot store ${typeof value} in ${type} column '${column}'`);
-  }
-}
-
 function executeStatement(stmt: Statement, catalog: Catalog): QueryResult {
   const started = performance.now();
 
@@ -403,14 +390,13 @@ function executeStatement(stmt: Statement, catalog: Catalog): QueryResult {
         }
         const row: Row = table.def.columns.map(() => null);
         values.forEach((expr, i) => {
-          const ordinal = ordinals[i]!;
-          const value = constantValue(expr, stmt.table);
-          checkAssignable(value, table.def.columns[ordinal]!.type, table.def.columns[ordinal]!.name);
-          row[ordinal] = value;
+          row[ordinals[i]!] = constantValue(expr, stmt.table);
         });
         return row;
       });
 
+      // The catalog checks every value against its declared type, all rows
+      // before any is written.
       const n = catalog.insert(stmt.table, rows);
       return {
         columns: [],

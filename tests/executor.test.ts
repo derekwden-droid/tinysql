@@ -302,6 +302,20 @@ describe("DML errors", () => {
     expect(() => run("INSERT INTO t (i) VALUES ('x');", catalog)).toThrow(/cannot store/);
   });
 
+  it("rejects a fraction in an INTEGER column, and writes none of the rows", () => {
+    const catalog = catalogWith("CREATE TABLE t (i INTEGER, r REAL);");
+    expect(() => run("INSERT INTO t (i, r) VALUES (1, 1.0), (1.5, 1.5);", catalog)).toThrow(
+      "cannot store 1.5 in integer column 'i'",
+    );
+    expect(run("SELECT i FROM t;", catalog).rows).toEqual([]);
+  });
+
+  it("accepts 2.0 in an INTEGER column, because it is 2", () => {
+    const catalog = catalogWith("CREATE TABLE t (i INTEGER, r REAL);");
+    run("INSERT INTO t (i, r) VALUES (2.0, 1.5);", catalog);
+    expect(run("SELECT i, r FROM t;", catalog).rows).toEqual([[2, 1.5]]);
+  });
+
   it("rejects a value-count mismatch and unknown columns", () => {
     const catalog = catalogWith("CREATE TABLE t (i INTEGER, j INTEGER);");
     expect(() => run("INSERT INTO t (i, j) VALUES (1);", catalog)).toThrow(/expected 2 values/);

@@ -1,6 +1,7 @@
 import { ExecError, PlanningError } from "./errors.js";
+import { formatValue } from "./format.js";
 import { HashIndex, encodeKey } from "./hash-index.js";
-import type { ColumnDef, Row, TableDef } from "./types.js";
+import { fitsType, type ColumnDef, type Row, type TableDef } from "./types.js";
 
 export const MAX_ROWS = 200_000;
 export const MAX_BYTES = 20 * 1024 * 1024;
@@ -78,13 +79,27 @@ export class Catalog {
 
   // -------------------------------------------------------------------- rows
 
-  /** Append rows, maintaining every index on the table. */
+  /**
+   * Append rows, maintaining every index on the table. Every value is checked
+   * against its column's declared type before anything is written, so a failed
+   * insert changes nothing, and no write path (INSERT, CSV import, the UI's
+   * generator) can store a value its column's type does not allow.
+   */
   insert(tableName: string, rows: Row[]): number {
     const table = this.getTable(tableName);
     if (table.rows.length + rows.length > MAX_ROWS) {
       throw new ExecError(
         `table '${tableName}' would exceed the ${MAX_ROWS.toLocaleString("en-US")} row cap`,
       );
+    }
+    for (const row of rows) {
+      table.def.columns.forEach((column, i) => {
+        const value = row[i] ?? null;
+        if (!fitsType(value, column.type)) {
+          const shown = typeof value === "string" ? `'${value}'` : formatValue(value);
+          throw new ExecError(`cannot store ${shown} in ${column.type} column '${column.name}'`);
+        }
+      });
     }
     const tableIndexes = [...this.indexes.values()].filter((i) => i.table === tableName);
     for (const row of rows) {

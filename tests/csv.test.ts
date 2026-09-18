@@ -84,6 +84,35 @@ describe("csv parsing", () => {
   });
 });
 
+describe("csv type inference reads every cell", () => {
+  // Two hundred integers first: inference used to sample exactly this many
+  // cells, call the column INTEGER, and store whatever came after it.
+  const withLastCell = (last: string): string =>
+    ["x", ...Array.from({ length: 200 }, (_, i) => String(i + 1)), last].join("\n");
+
+  it("widens to REAL when a late cell has a fraction", () => {
+    const table = parseCsv(withLastCell("1.5"));
+    expect(table.columns[0]!.type).toBe("real");
+    expect(table.rows.at(-1)).toEqual([1.5]);
+  });
+
+  it("falls back to TEXT when a late cell is not a plain number", () => {
+    for (const late of ["abc", "0x1F", "Infinity"]) {
+      const table = parseCsv(withLastCell(late));
+      expect(table.columns[0]!.type, late).toBe("text");
+      expect(table.rows[0], late).toEqual(["1"]);
+      expect(table.rows.at(-1), late).toEqual([late]);
+    }
+  });
+
+  it("loads every row past the old sample under the declared type", () => {
+    const catalog = new Catalog();
+    createTableFromCsv(catalog, "t", withLastCell("1.5"));
+    expect(catalog.columns("t")[0]!.type).toBe("real");
+    expect(catalog.rowCount("t")).toBe(201);
+  });
+});
+
 describe("csv into the catalog", () => {
   it("creates a queryable table", () => {
     const catalog = new Catalog();
