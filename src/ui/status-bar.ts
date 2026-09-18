@@ -1,8 +1,19 @@
 import { formatMs, pluralRows } from "../engine/format.js";
 import type { QueryResult } from "../engine/executor.js";
 
-/** `24 rows · 3.2 ms · 80 rows touched · index used: emp_dept` */
-export function renderStatus(host: HTMLElement, result: QueryResult | null, error: string | null): void {
+/**
+ * `24 rows · 3.2 ms · 80 rows touched · index used: emp_dept`
+ *
+ * `baseline` is the rows-touched count of the same statement before an index
+ * was added, shown as `(was N)` so the comparison needs no memory. Rows, not
+ * milliseconds: sub-millisecond timings on small tables are noise.
+ */
+export function renderStatus(
+  host: HTMLElement,
+  result: QueryResult | null,
+  error: string | null,
+  baseline?: number,
+): void {
   host.replaceChildren();
 
   if (error !== null) {
@@ -27,7 +38,10 @@ export function renderStatus(host: HTMLElement, result: QueryResult | null, erro
     sep(),
     part(formatMs(result.stats.elapsedMs)),
     sep(),
-    part(`${result.stats.rowsTouched.toLocaleString("en-US")} rows touched`),
+    part(
+      `${result.stats.rowsTouched.toLocaleString("en-US")} rows touched` +
+        (baseline === undefined ? "" : ` (was ${baseline.toLocaleString("en-US")})`),
+    ),
     sep(),
   ];
 

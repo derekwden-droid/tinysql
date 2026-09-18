@@ -1,15 +1,17 @@
-import { children, describe, type PlanNode } from "../engine/planner.js";
+import { children, describe, suggestIndex, type IndexSuggestion, type PlanNode } from "../engine/planner.js";
 import type { NodeStats } from "../engine/executor.js";
 
 /**
  * Vertical plan tree. After EXPLAIN it shows estimates only; after a run it adds
  * the actual row counts beside them, and marks whichever node read the most
- * base-relation rows.
+ * base-relation rows. When an index would turn a scan into a lookup, the panel
+ * offers it above the tree as one click.
  */
 export function renderPlan(
   host: HTMLElement,
   plan: PlanNode | null,
   nodeStats: Map<number, NodeStats> | null,
+  onIndexAndRerun?: (table: string, column: string) => void,
 ): void {
   host.replaceChildren();
 
@@ -19,6 +21,11 @@ export function renderPlan(
     p.textContent = "Run or explain a SELECT to see its plan.";
     host.append(p);
     return;
+  }
+
+  if (onIndexAndRerun !== undefined) {
+    const suggestion = suggestIndex(plan);
+    if (suggestion !== null) host.append(renderSuggestion(suggestion, onIndexAndRerun));
   }
 
   const hottest = findHottest(plan, nodeStats);
@@ -39,6 +46,7 @@ function renderNode(
   hottest: number | null,
 ): HTMLElement {
   const wrapper = document.createElement("div");
+  wrapper.className = "plan-branch";
 
   const card = document.createElement("div");
   card.className = "plan-node";
@@ -85,11 +93,46 @@ function renderNode(
   const kids = children(node);
   if (kids.length > 0) {
     const container = document.createElement("div");
-    container.className = "plan-children";
+    // A single input stacks straight below its parent; only a join's two inputs
+    // fork and indent, so the tree never gets more than one level narrower.
+    container.className = kids.length > 1 ? "plan-children fork" : "plan-children";
     for (const child of kids) container.append(renderNode(child, nodeStats, hottest));
     wrapper.append(container);
   }
   return wrapper;
+}
+
+function renderSuggestion(
+  suggestion: IndexSuggestion,
+  onAccept: (table: string, column: string) => void,
+): HTMLElement {
+  const { table, column } = suggestion;
+  const box = document.createElement("div");
+  box.className = "plan-suggest";
+
+  const text = document.createElement("p");
+  text.append(
+    code(`${table}.${column}`),
+    document.createTextNode(" has no index, so this plan reads every row of "),
+    code(table),
+    document.createTextNode("."),
+  );
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "primary";
+  button.textContent = "Create index and rerun";
+  button.title = `Add a hash index on ${table}(${column}), then run the same statement again`;
+  button.addEventListener("click", () => onAccept(table, column));
+
+  box.append(text, button);
+  return box;
+}
+
+function code(text: string): HTMLElement {
+  const el = document.createElement("code");
+  el.textContent = text;
+  return el;
 }
 
 function badge(text: string, className: string): HTMLElement {
