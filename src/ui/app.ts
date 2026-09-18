@@ -1,9 +1,9 @@
 import { Catalog } from "../engine/catalog.js";
 import { createTableFromCsv, tableNameFromFile } from "../engine/csv.js";
+import { generateLargeTable, LARGE_QUERY, LARGE_ROWS, LARGE_TABLE } from "../engine/demo-data.js";
 import { formatError, isTinysqlError } from "../engine/errors.js";
 import { run, type QueryResult } from "../engine/executor.js";
 import { parse } from "../engine/parser.js";
-import type { Row } from "../engine/types.js";
 import { createEditor, type EditorHandle } from "./editor.js";
 import { installDropzone } from "./dropzone.js";
 import { renderPlan } from "./plan-view.js";
@@ -13,8 +13,6 @@ import { renderStatus } from "./status-bar.js";
 
 const STORAGE_KEY = "tinysql.editor";
 const DATASETS = ["employees", "departments", "orders"] as const;
-const LARGE_TABLE = "orders_big";
-const LARGE_ROWS = 50_000;
 
 const WELCOME = `-- This ran on load: the plan panel shows it reading every row of employees.
 -- Press "Create index and rerun" there to index the WHERE, then again for the join.
@@ -135,16 +133,10 @@ export async function start(): Promise<void> {
     onGenerateLarge() {
       generateLargeTable(catalog);
       refreshSchema();
-      editor.setValue(`-- ${LARGE_ROWS.toLocaleString("en-US")} rows. Run this, then press "Create index and rerun"
--- in the plan panel and compare the time and the rows touched.
-SELECT id, amount, placed_at
-FROM ${LARGE_TABLE}
-WHERE employee_id = 17
-ORDER BY amount DESC
-LIMIT 20;`);
+      editor.setValue(LARGE_QUERY);
       elements.status.replaceChildren(
         document.createTextNode(
-          `${LARGE_TABLE} built with ${LARGE_ROWS.toLocaleString("en-US")} rows — run the query, then add the index.`,
+          `${LARGE_TABLE} built with ${LARGE_ROWS.toLocaleString("en-US")} rows — run the query, then take both index suggestions.`,
         ),
       );
     },
@@ -341,38 +333,3 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-/**
- * A deterministic 50k-row table. Forty-row samples cannot show the planner
- * working: both strategies finish in well under a millisecond and only the row
- * counter moves. At this size the index changes the wall clock.
- */
-function generateLargeTable(catalog: Catalog): void {
-  if (catalog.hasTable(LARGE_TABLE)) catalog.dropTable(LARGE_TABLE);
-  catalog.createTable({
-    name: LARGE_TABLE,
-    columns: [
-      { name: "id", type: "integer" },
-      { name: "employee_id", type: "integer" },
-      { name: "amount", type: "real" },
-      { name: "placed_at", type: "text" },
-    ],
-  });
-
-  // Linear congruential generator: same table on every machine, every run.
-  let seed = 20260910;
-  const nextRandom = (): number => {
-    seed = (seed * 1664525 + 1013904223) % 4294967296;
-    return seed / 4294967296;
-  };
-
-  const rows: Row[] = [];
-  for (let i = 1; i <= LARGE_ROWS; i++) {
-    const employeeId = 1 + Math.floor(nextRandom() * 44);
-    const amount = Math.round(nextRandom() * 500000) / 100;
-    const day = 1 + Math.floor(nextRandom() * 28);
-    const month = 1 + Math.floor(nextRandom() * 12);
-    const placedAt = `2026-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    rows.push([i, employeeId, amount, placedAt]);
-  }
-  catalog.insert(LARGE_TABLE, rows);
-}
