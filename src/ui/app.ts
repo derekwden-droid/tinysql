@@ -17,7 +17,7 @@ const LARGE_TABLE = "orders_big";
 const LARGE_ROWS = 50_000;
 
 const WELCOME = `-- This ran on load: the plan panel shows it reading every row of employees.
--- Press "Create index and rerun" there and watch the plan switch to an index.
+-- Press "Create index and rerun" there to index the WHERE, then again for the join.
 SELECT e.name AS employee, d.name AS department, e.salary
 FROM employees e
 JOIN departments d ON e.dept_id = d.id

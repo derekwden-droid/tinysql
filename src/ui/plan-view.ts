@@ -106,16 +106,20 @@ function renderSuggestion(
   suggestion: IndexSuggestion,
   onAccept: (table: string, column: string) => void,
 ): HTMLElement {
-  const { table, column } = suggestion;
+  const { table, column, reason } = suggestion;
   const box = document.createElement("div");
   box.className = "plan-suggest";
 
   const text = document.createElement("p");
   text.append(
     code(`${table}.${column}`),
-    document.createTextNode(" has no index, so this plan reads every row of "),
+    document.createTextNode(
+      reason === "join"
+        ? " has no index, so the join rereads every row of "
+        : " has no index, so this plan reads every row of ",
+    ),
     code(table),
-    document.createTextNode("."),
+    document.createTextNode(reason === "join" ? " for each outer row." : "."),
   );
 
   const button = document.createElement("button");
