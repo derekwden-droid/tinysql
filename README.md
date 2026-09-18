@@ -26,7 +26,7 @@ Then open the printed URL. Three datasets load on their own, and on a first visi
 runs too, so the first screen already has a plan to read.
 
 ```bash
-npm test          # 124 tests
+npm test          # 125 tests
 npm run build     # static site in dist/
 ```
 
@@ -75,10 +75,13 @@ WHERE e.dept_id = 3;
 then `CREATE INDEX emp_dept ON employees (dept_id);`, then the `EXPLAIN` again. Note the aliases on
 the output columns — without them the result would have two columns both called `name`.
 
-Forty rows are too few to feel. Press **Generate 50k orders** in the schema panel, run the query it
-writes, then **Create index and rerun**: on this machine that is 14.4 ms and 50,000 rows touched
-before, 2.6 ms and 1,149 rows touched after. Same answer, less work — which is the entire point of a
-planner.
+Forty rows are too few to feel. Press **Generate 50k orders** in the schema panel and run the query it
+writes: employee 17's largest orders, joined to the employee's name. Then press **Create index and
+rerun** twice. The first click indexes the `WHERE` column; the second stops the join rereading all 44
+employees for each of the 1,149 orders. The three runs read 100,600, then 51,749, then 2,298 rows,
+and each click at least halves the time: across three fresh loads of the production build on this
+machine, 14–33 ms, then 6–11 ms, then 3–5 ms. Same answer, less work — which is the entire point of
+a planner.
 
 ## How it fits together
 
@@ -209,7 +212,7 @@ there are no `any` casts, and the switch statements are exhaustive.
 ## Layout
 
 ```
-src/engine/   lexer, parser, planner, executor, catalog, hash index, CSV — no DOM
+src/engine/   lexer, parser, planner, executor, catalog, hash index, CSV, demo data — no DOM
 src/ui/       editor, schema panel, results grid, plan view, status bar, dropzone
 src/cli/      the Node entry point
 tests/        one file per engine module, plus a golden test over the bundled CSVs
