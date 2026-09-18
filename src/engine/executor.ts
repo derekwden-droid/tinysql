@@ -1,6 +1,6 @@
 import { ExecError, PlanningError } from "./errors.js";
 import { parse } from "./parser.js";
-import { encodeKey } from "./hash-index.js";
+import { encodeRowKey } from "./hash-index.js";
 import {
   children,
   explainRows,
@@ -163,13 +163,6 @@ function asBool3(v: Value): Bool3 {
   return typeof v === "boolean" ? v : null;
 }
 
-/** Row identity for DISTINCT. Two NULLs are duplicates of each other. */
-function rowKey(row: Row): string {
-  let key = "";
-  for (const v of row) key += (encodeKey(v) ?? "x:") + "\u0000";
-  return key;
-}
-
 // ------------------------------------------------------------------ runtime
 
 interface ExecContext {
@@ -274,7 +267,7 @@ function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
     case "Distinct": {
       const seen = new Set<string>();
       for (const row of execNode(node.child, ctx)) {
-        const key = rowKey(row);
+        const key = encodeRowKey(row);
         if (seen.has(key)) continue;
         seen.add(key);
         self.actualRows++;

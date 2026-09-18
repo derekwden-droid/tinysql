@@ -140,6 +140,15 @@ describe("DISTINCT, ORDER BY, LIMIT", () => {
     expect(flat(run("SELECT DISTINCT k FROM t;", catalog).rows)).toEqual([1, null, 2]);
   });
 
+  it("keeps rows apart even when text contains a NUL character", () => {
+    // DISTINCT keys used to join column keys with NUL, so these two different
+    // rows produced the same key and one of them vanished.
+    const nul = String.fromCharCode(0);
+    const catalog = catalogWith("CREATE TABLE t (a TEXT, b TEXT);");
+    run(`INSERT INTO t (a, b) VALUES ('p${nul}t:q', 'r'), ('p', 'q${nul}t:r');`, catalog);
+    expect(run("SELECT DISTINCT a, b FROM t;", catalog).rows).toHaveLength(2);
+  });
+
   it("places NULLs first ascending and last descending", () => {
     const catalog = seeded();
     expect(flat(run("SELECT dept_id FROM employees ORDER BY dept_id;", catalog).rows)).toEqual([
