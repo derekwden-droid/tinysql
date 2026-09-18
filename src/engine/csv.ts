@@ -1,8 +1,6 @@
 import { ExecError } from "./errors.js";
 import { MAX_BYTES, MAX_ROWS, type Catalog } from "./catalog.js";
-import type { ColumnDef, Row, SqlType, Value } from "./types.js";
-
-const INFER_SAMPLE = 200;
+import { fitsType, type ColumnDef, type Row, type SqlType, type Value } from "./types.js";
 
 export interface CsvTable {
   columns: ColumnDef[];
@@ -99,34 +97,32 @@ function dedupe(names: string[]): string[] {
 const INTEGER_RE = /^[+-]?[0-9]+$/;
 const REAL_RE = /^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
 
-/** Infer a column type from the first `INFER_SAMPLE` non-empty cells. */
+/**
+ * The narrowest type that every non-empty cell converts to exactly: INTEGER,
+ * then REAL, then TEXT. Every cell, not a sample: a type read off the first N
+ * cells is only a guess about the rest, and a wrong guess used to store `1.5`,
+ * or the text `abc`, in an INTEGER column. The test is the catalog's own
+ * `fitsType`, so a CSV import can never be refused by the insert that follows.
+ */
 function inferType(cells: string[]): SqlType {
   let seen = 0;
   let allInteger = true;
-  let allReal = true;
 
   for (const cell of cells) {
     if (cell === "") continue;
     seen++;
-    if (!INTEGER_RE.test(cell)) allInteger = false;
-    if (!REAL_RE.test(cell)) allReal = false;
-    if (!allReal) break;
-    if (seen >= INFER_SAMPLE) break;
+    const n = Number(cell);
+    if (!REAL_RE.test(cell) || !fitsType(n, "real")) return "text";
+    if (allInteger && !(INTEGER_RE.test(cell) && fitsType(n, "integer"))) allInteger = false;
   }
 
   if (seen === 0) return "text";
-  if (allInteger) return "integer";
-  if (allReal) return "real";
-  return "text";
+  return allInteger ? "integer" : "real";
 }
 
 function coerce(cell: string, type: SqlType): Value {
   if (cell === "") return null;
-  if (type === "integer" || type === "real") {
-    const n = Number(cell);
-    return Number.isNaN(n) ? cell : n;
-  }
-  return cell;
+  return type === "integer" || type === "real" ? Number(cell) : cell;
 }
 
 /** A header row is usable when no cell looks like a number. */
