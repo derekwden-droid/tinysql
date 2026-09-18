@@ -101,6 +101,21 @@ describe("the sample join", () => {
     expect(lookup.stats.rowsTouched).toBeLessThan(scan.stats.rowsTouched);
   });
 
+  // The numbers the README and the demo's status bar quote.
+  it("reads 108 rows, then 71 with the WHERE indexed, then 14 with the join indexed too", () => {
+    const catalog = loaded();
+    const scan = run(`${SAMPLE_JOIN};`, catalog);
+    run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
+    const lookup = run(`${SAMPLE_JOIN};`, catalog);
+    run("CREATE INDEX dept_id ON departments (id);", catalog);
+    const probe = run(`${SAMPLE_JOIN};`, catalog);
+
+    expect([scan, lookup, probe].map((r) => r.stats.rowsTouched)).toEqual([108, 71, 14]);
+    expect(lookup.rows).toEqual(scan.rows);
+    expect(probe.rows).toEqual(scan.rows);
+    expect(probe.stats.indexesUsed).toEqual(["emp_dept", "dept_id"]);
+  });
+
   it("plans an IndexLookup under the join once the index exists", () => {
     const catalog = loaded();
     run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
@@ -122,6 +137,8 @@ describe("the sample join", () => {
     const scanCatalog = loaded();
     const indexCatalog = loaded();
     run("CREATE INDEX emp_dept ON employees (dept_id);", indexCatalog);
+    const probeCatalog = loaded();
+    run("CREATE INDEX dept_id ON departments (id);", probeCatalog);
 
     for (let deptId = 0; deptId <= 9; deptId++) {
       const sql = `
@@ -132,7 +149,11 @@ describe("the sample join", () => {
         ORDER BY e.id;`;
       const a = run(sql, scanCatalog);
       const b = run(sql, indexCatalog);
+      const c = run(sql, probeCatalog);
       expect(JSON.stringify(b.rows), `dept_id = ${deptId} disagreed`).toBe(JSON.stringify(a.rows));
+      expect(JSON.stringify(c.rows), `dept_id = ${deptId} disagreed with a join probe`).toBe(
+        JSON.stringify(a.rows),
+      );
     }
   });
 });

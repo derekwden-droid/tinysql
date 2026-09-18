@@ -54,9 +54,19 @@ interface PlanBase {
   schema: ColumnRef[];
 }
 
+/**
+ * The key an IndexLookup probes with. A literal comes from `WHERE col = literal`
+ * and is fixed at plan time. An outer column comes from a join: the lookup runs
+ * once per outer row with that row's join value, which is what turns a nested
+ * loop into an index nested loop.
+ */
+export type Probe =
+  | { kind: "literal"; value: Value }
+  | { kind: "outer"; ordinal: number; label: string };
+
 export type PlanNode =
   | (PlanBase & { op: "SeqScan"; table: string; alias: string })
-  | (PlanBase & { op: "IndexLookup"; table: string; alias: string; index: string; column: string; value: Value })
+  | (PlanBase & { op: "IndexLookup"; table: string; alias: string; index: string; column: string; probe: Probe })
   | (PlanBase & { op: "Filter"; predicate: PExpr; child: PlanNode })
   | (PlanBase & {
       op: "NestedLoopJoin";
@@ -91,8 +101,10 @@ export function describe(node: PlanNode): string {
   switch (node.op) {
     case "SeqScan":
       return aliasLabel(node.table, node.alias);
-    case "IndexLookup":
-      return `${aliasLabel(node.table, node.alias)} using ${node.index} on ${node.column} = ${literal(node.value)}`;
+    case "IndexLookup": {
+      const key = node.probe.kind === "literal" ? literal(node.probe.value) : node.probe.label;
+      return `${aliasLabel(node.table, node.alias)} using ${node.index} on ${node.column} = ${key}`;
+    }
     case "Filter":
       return exprToString(node.predicate);
     case "NestedLoopJoin":
@@ -155,26 +167,54 @@ export function explainRows(root: PlanNode): ExplainRow[] {
 export interface IndexSuggestion {
   table: string;
   column: string;
+  /** `filter`: a `WHERE col = literal` over a scan. `join`: a JOIN column the join could probe. */
+  reason: "filter" | "join";
 }
 
 /**
- * The index rule read backwards: the index that would turn a scan in this plan
- * into an IndexLookup. The planner leaves a pushed `col = literal` in a Filter
- * directly above a SeqScan only because no index matched, so indexing that
- * column is exactly what flips the plan. First match in plan order, as the
- * planner itself matches; null when no index would change anything.
+ * The index rules read backwards: the index that would turn a scan in this plan
+ * into an IndexLookup, or null when no index would change anything. WHERE comes
+ * first, then the join, which is also the order the demo teaches them in.
  */
-export function suggestIndex(node: PlanNode): IndexSuggestion | null {
+export function suggestIndex(plan: PlanNode): IndexSuggestion | null {
+  return suggestForFilter(plan) ?? suggestForJoin(plan);
+}
+
+/**
+ * The planner leaves a pushed `col = literal` in a Filter directly above a
+ * SeqScan only because no index matched, so indexing that column is exactly
+ * what flips the scan. First match in plan order, as the planner matches.
+ */
+function suggestForFilter(node: PlanNode): IndexSuggestion | null {
   if (node.op === "Filter" && node.child.op === "SeqScan") {
     const scan = node.child;
     for (const conjunct of flattenAnd(node.predicate)) {
       const ordinal = equalityProbeOrdinal(conjunct);
       const column = ordinal === null ? undefined : scan.schema[ordinal];
-      if (column !== undefined) return { table: scan.table, column: column.name };
+      if (column !== undefined) return { table: scan.table, column: column.name, reason: "filter" };
     }
   }
   for (const child of children(node)) {
-    const found = suggestIndex(child);
+    const found = suggestForFilter(child);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/**
+ * A join whose inner side still scans its whole table (rule 5 found no index
+ * on the inner join column) would probe instead once that column is indexed.
+ */
+function suggestForJoin(node: PlanNode): IndexSuggestion | null {
+  if (node.op === "NestedLoopJoin") {
+    const inner = node.right.op === "Filter" ? node.right.child : node.right;
+    const column = inner.op === "SeqScan" ? inner.schema[node.rightCol] : undefined;
+    if (inner.op === "SeqScan" && column !== undefined) {
+      return { table: inner.table, column: column.name, reason: "join" };
+    }
+  }
+  for (const child of children(node)) {
+    const found = suggestForJoin(child);
     if (found !== null) return found;
   }
   return null;
@@ -465,20 +505,19 @@ function planRelation(
 
   for (const conjunct of pushedConjuncts) {
     if (scan === null) {
-      const probe = asEqualityProbe(conjunct, scope, relIndex);
-      if (probe !== null) {
-        const index = catalog.findIndex(rel.table, probe.column);
+      const match = asEqualityProbe(conjunct, scope, relIndex);
+      if (match !== null) {
+        const index = catalog.findIndex(rel.table, match.column);
         if (index !== undefined) {
-          const distinct = Math.max(index.distinctKeys, 1);
           scan = {
             id: 0,
             op: "IndexLookup",
             table: rel.table,
             alias: rel.qualifier,
             index: index.name,
-            column: probe.column,
-            value: probe.value,
-            estRows: Math.max(1, Math.ceil(rowCount / distinct)),
+            column: match.column,
+            probe: { kind: "literal", value: match.value },
+            estRows: rowsPerKey(rowCount, index.distinctKeys),
             schema,
           };
           continue; // conjunct consumed by the lookup
@@ -552,23 +591,70 @@ function planJoin(
   const rightRel = relations[1]!;
 
   const left = sides[0]!;
-  const right = sides[1]!;
+  const scanned = sides[1]!;
+  const leftCol = leftSide.index - leftRel.offset;
   const distinct = Math.max(catalog.distinctCount(rightRel.table, rightSide.ref.name), 1);
+
+  // 5. Index nested loop: rather than reread the whole inner table for every
+  //    outer row, probe an index on its join column with that row's key.
+  const outer = { ordinal: leftCol, label: outputName(leftSide.ref), rows: left.estRows };
+  const right = probeInnerSide(scanned, rightRel, rightSide.ref.name, outer, catalog) ?? scanned;
 
   return {
     id: 0,
     op: "NestedLoopJoin",
     left,
     right,
-    leftCol: leftSide.index - leftRel.offset,
+    leftCol,
     rightCol: rightSide.index - rightRel.offset,
     leftLabel: outputName(leftSide.ref),
     rightLabel: outputName(rightSide.ref),
     // An equijoin is not a cross product: dividing by the right key's distinct
-    // count keeps the estimate near the truth instead of ~20x high.
-    estRows: Math.ceil((left.estRows * right.estRows) / distinct),
+    // count keeps the estimate near the truth instead of ~20x high. Probing or
+    // scanning, the join yields the same rows, so the estimate uses the scan.
+    estRows: Math.ceil((left.estRows * scanned.estRows) / distinct),
     schema: [...left.schema, ...right.schema],
   };
+}
+
+/**
+ * Rule 5, the join probe. When the inner side would scan its whole table (a
+ * SeqScan, perhaps under its pushed Filter) and its join column has an index,
+ * swap the scan for an IndexLookup keyed by each outer row's join value. A
+ * literal lookup on the inner side wins: it runs once, not once per outer row.
+ * Only the JOIN table is probed; the planner never reorders a join.
+ */
+function probeInnerSide(
+  inner: PlanNode,
+  rel: Relation,
+  column: string,
+  outer: { ordinal: number; label: string; rows: number },
+  catalog: Catalog,
+): PlanNode | null {
+  const scan = inner.op === "Filter" ? inner.child : inner;
+  if (scan.op !== "SeqScan") return null;
+  const index = catalog.findIndex(rel.table, column);
+  if (index === undefined) return null;
+
+  const lookup: PlanNode = {
+    id: 0,
+    op: "IndexLookup",
+    table: rel.table,
+    alias: rel.qualifier,
+    index: index.name,
+    column,
+    probe: { kind: "outer", ordinal: outer.ordinal, label: outer.label },
+    // Summed over every probe, so it compares directly with the actual count.
+    estRows: outer.rows * rowsPerKey(catalog.rowCount(rel.table), index.distinctKeys),
+    schema: scan.schema,
+  };
+  if (inner.op !== "Filter") return lookup;
+  return { ...inner, child: lookup, estRows: Math.ceil(lookup.estRows * FILTER_SELECTIVITY) };
+}
+
+/** Rows one index key is expected to match: `max(1, ceil(rows / distinct keys))`. */
+function rowsPerKey(rowCount: number, distinctKeys: number): number {
+  return Math.max(1, Math.ceil(rowCount / Math.max(distinctKeys, 1)));
 }
 
 function resolveJoinSide(expr: ColumnExpr, scope: Scope): Resolved {

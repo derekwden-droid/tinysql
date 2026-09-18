@@ -179,7 +179,17 @@ function statsFor(ctx: ExecContext, id: number): NodeStats {
   return s;
 }
 
-function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
+/** Whether a join's inner side probes an index with the outer row, rather than scanning. */
+function probesOuter(node: PlanNode): boolean {
+  if (node.op === "IndexLookup") return node.probe.kind === "outer";
+  return node.op === "Filter" && probesOuter(node.child);
+}
+
+/**
+ * `outer` is the current outer row when this node sits on the inner side of an
+ * index nested loop; a join probe reads its key from it.
+ */
+function* execNode(node: PlanNode, ctx: ExecContext, outer?: Row): Generator<Row> {
   const self = statsFor(ctx, node.id);
 
   switch (node.op) {
@@ -201,7 +211,16 @@ function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
       if (index === undefined || index.table !== node.table || index.column !== node.column) {
         throw new ExecError(`index '${node.index}' changed between planning and execution`);
       }
-      for (const rowId of index.lookup(node.value)) {
+      let key: Value;
+      if (node.probe.kind === "literal") {
+        key = node.probe.value;
+      } else {
+        if (outer === undefined) {
+          throw new ExecError(`join probe on '${node.index}' ran without an outer row`);
+        }
+        key = outer[node.probe.ordinal] ?? null;
+      }
+      for (const rowId of index.lookup(key)) {
         self.rowsTouched++;
         self.actualRows++;
         yield table.rows[rowId]!;
@@ -210,7 +229,7 @@ function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
     }
 
     case "Filter": {
-      for (const row of execNode(node.child, ctx)) {
+      for (const row of execNode(node.child, ctx, outer)) {
         if (isTrue(asBool3(evaluate(node.predicate, row)))) {
           self.actualRows++;
           yield row;
@@ -220,7 +239,25 @@ function* execNode(node: PlanNode, ctx: ExecContext): Generator<Row> {
     }
 
     case "NestedLoopJoin": {
-      // The inner side is materialised once and rescanned per outer row.
+      if (probesOuter(node.right)) {
+        // Index nested loop: run the inner side once per outer row, keyed by
+        // that row. Its rows are counted where they are read, at the lookup;
+        // this node reads nothing itself.
+        for (const outerRow of execNode(node.left, ctx)) {
+          const key = outerRow[node.leftCol] ?? null;
+          if (key === null) continue;
+          for (const row of execNode(node.right, ctx, outerRow)) {
+            // Re-check `=`: the index narrows the rows, it never decides the answer.
+            if (valuesEqual(key, row[node.rightCol] ?? null)) {
+              self.actualRows++;
+              yield [...outerRow, ...row];
+            }
+          }
+        }
+        return;
+      }
+
+      // Otherwise the inner side is materialised once and rescanned per outer row.
       const inner: Row[] = [...execNode(node.right, ctx)];
       for (const outer of execNode(node.left, ctx)) {
         const key = outer[node.leftCol] ?? null;

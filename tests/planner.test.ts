@@ -113,6 +113,61 @@ describe("planner", () => {
     );
   });
 
+  it("probes an indexed JOIN column once per outer row", () => {
+    const catalog = seeded();
+    run("CREATE INDEX dept_id ON departments (id);", catalog);
+    const sql = `
+      SELECT e.name AS employee, d.name AS department
+      FROM employees e
+      JOIN departments d ON e.dept_id = d.id
+      WHERE e.dept_id = 3`;
+    expect(plan(sql, catalog)).toBe(
+      [
+        "Project(employee, department)",
+        "  NestedLoopJoin(e.dept_id = d.id)",
+        "    Filter(e.dept_id = 3)",
+        "      SeqScan(employees AS e)",
+        "    IndexLookup(departments AS d using dept_id on id = e.dept_id)",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the inner side's own filter above the probe", () => {
+    const catalog = seeded();
+    run("CREATE INDEX dept_id ON departments (id);", catalog);
+    const sql = "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.floor > 1";
+    expect(plan(sql, catalog)).toBe(
+      [
+        "Project(n)",
+        "  NestedLoopJoin(e.dept_id = d.id)",
+        "    SeqScan(employees AS e)",
+        "    Filter(d.floor > 1)",
+        "      IndexLookup(departments AS d using dept_id on id = e.dept_id)",
+      ].join("\n"),
+    );
+  });
+
+  it("prefers a WHERE lookup on the inner side, which runs once, to a probe per outer row", () => {
+    const catalog = seeded();
+    run("CREATE INDEX dept_id ON departments (id);", catalog);
+    const sql = "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.id = 3";
+    expect(plan(sql, catalog)).toContain("    IndexLookup(departments AS d using dept_id on id = 3)");
+  });
+
+  it("never reorders a join to reach an index on the outer side", () => {
+    const catalog = seeded();
+    run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
+    const sql = "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id";
+    expect(plan(sql, catalog)).toBe(
+      [
+        "Project(n)",
+        "  NestedLoopJoin(e.dept_id = d.id)",
+        "    SeqScan(employees AS e)",
+        "    SeqScan(departments AS d)",
+      ].join("\n"),
+    );
+  });
+
   it("sorts below the projection so ORDER BY can name an unselected column", () => {
     const catalog = seeded();
     expect(plan("SELECT name FROM employees ORDER BY salary DESC LIMIT 5", catalog)).toBe(
@@ -181,14 +236,20 @@ describe("index suggestions", () => {
     JOIN departments d ON e.dept_id = d.id
     WHERE e.dept_id = 3`;
 
-  it("names the index the aliased sample join is missing", () => {
+  it("walks the sample join through both lessons, WHERE first and then the join", () => {
     const catalog = seeded();
-    expect(suggestIndex(tree(SAMPLE_JOIN, catalog))).toEqual({ table: "employees", column: "dept_id" });
-  });
-
-  it("suggests nothing once the plan already uses that index", () => {
-    const catalog = seeded();
+    expect(suggestIndex(tree(SAMPLE_JOIN, catalog))).toEqual({
+      table: "employees",
+      column: "dept_id",
+      reason: "filter",
+    });
     run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
+    expect(suggestIndex(tree(SAMPLE_JOIN, catalog))).toEqual({
+      table: "departments",
+      column: "id",
+      reason: "join",
+    });
+    run("CREATE INDEX dept_id ON departments (id);", catalog);
     expect(suggestIndex(tree(SAMPLE_JOIN, catalog))).toBeNull();
   });
 
@@ -208,32 +269,36 @@ describe("index suggestions", () => {
     expect(suggestIndex(tree("SELECT name FROM employees", catalog))).toBeNull();
   });
 
-  it("suggests nothing for an equality that spans both sides of a join", () => {
+  it("offers only the join when the WHERE equality spans both tables", () => {
+    // `e.id = d.floor` needs both rows at once, so no index can serve it. The
+    // join's own inner column is still worth indexing.
     const catalog = seeded();
     const sql = "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.id = d.floor";
-    expect(suggestIndex(tree(sql, catalog))).toBeNull();
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "departments", column: "id", reason: "join" });
   });
 
   it("follows the planner's first-match order among conjuncts", () => {
     const catalog = seeded();
     const sql = "SELECT name FROM employees WHERE salary > 1 AND city = 'Tampa' AND dept_id = 3";
-    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "employees", column: "city" });
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "employees", column: "city", reason: "filter" });
   });
 
-  it("works through both sides of a join, one index at a time", () => {
+  it("offers nothing for the join once the inner side has a WHERE lookup", () => {
     const catalog = seeded();
     const sql = `SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id
                  WHERE e.dept_id = 3 AND d.floor = 3`;
-    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "employees", column: "dept_id" });
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "employees", column: "dept_id", reason: "filter" });
     run("CREATE INDEX emp_dept ON employees (dept_id);", catalog);
-    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "departments", column: "floor" });
+    expect(suggestIndex(tree(sql, catalog))).toEqual({ table: "departments", column: "floor", reason: "filter" });
     run("CREATE INDEX dept_floor ON departments (floor);", catalog);
+    // The inner side now runs one lookup, once; probing it per outer row would be worse.
     expect(suggestIndex(tree(sql, catalog))).toBeNull();
   });
 
-  // The property the UI's "Create index and rerun" button depends on: taking a
-  // suggestion always turns that scan into a lookup on that column.
-  it("always names an index that turns the scan into an IndexLookup", () => {
+  // The property the UI's "Create index and rerun" button depends on: taking
+  // suggestions one after another, each one turns a scan into a lookup on that
+  // column, and they run out.
+  it("always names an index that turns a scan into an IndexLookup, until none is left", () => {
     const queries = [
       "SELECT name FROM employees WHERE dept_id = 3",
       "SELECT name FROM employees WHERE 3 = dept_id",
@@ -242,15 +307,21 @@ describe("index suggestions", () => {
       "SELECT name FROM employees WHERE city = 'Tampa' ORDER BY salary DESC LIMIT 2",
       "SELECT DISTINCT city FROM employees WHERE dept_id = 3",
       SAMPLE_JOIN,
+      "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id",
+      "SELECT e.name AS n FROM employees e JOIN departments d ON d.id = e.dept_id WHERE d.floor > 1",
       "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.floor = 2",
       "SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id WHERE e.salary > d.floor AND e.city = 'Tampa'",
     ];
     for (const sql of queries) {
       const catalog = seeded();
-      const suggestion = suggestIndex(tree(sql, catalog));
-      expect(suggestion, sql).not.toBeNull();
-      run(`CREATE INDEX probe ON ${suggestion!.table} (${suggestion!.column});`, catalog);
-      expect(plan(sql, catalog), sql).toContain(`using probe on ${suggestion!.column} = `);
+      let taken = 0;
+      for (let s = suggestIndex(tree(sql, catalog)); s !== null; s = suggestIndex(tree(sql, catalog))) {
+        taken++;
+        expect(taken, `${sql} keeps suggesting`).toBeLessThanOrEqual(3);
+        run(`CREATE INDEX probe_${taken} ON ${s.table} (${s.column});`, catalog);
+        expect(plan(sql, catalog), `${sql}, step ${taken}`).toContain(`using probe_${taken} on ${s.column} = `);
+      }
+      expect(taken, sql).toBeGreaterThan(0);
     }
   });
 });
@@ -288,6 +359,21 @@ describe("cardinality estimates", () => {
     if (root.op !== "Project" || root.child === undefined) throw new Error("unexpected plan");
     const join = root.child;
     // 4 employees x 3 departments / 3 distinct department ids = 4, not 12.
+    expect(join.estRows).toBe(4);
+  });
+
+  it("estimates a join probe as outer rows times rows per key", () => {
+    const catalog = seeded();
+    run("CREATE INDEX dept_id ON departments (id);", catalog);
+    const stmt = parseOne("SELECT e.name AS n FROM employees e JOIN departments d ON e.dept_id = d.id");
+    if (stmt.kind !== "select") throw new Error("expected a select");
+    const root = planSelect(stmt, catalog);
+    const join = root.op === "Project" ? root.child : undefined;
+    if (join?.op !== "NestedLoopJoin") throw new Error("unexpected plan");
+    // 4 outer rows, and 3 departments over 3 distinct ids is 1 row per probe.
+    expect(join.right.op).toBe("IndexLookup");
+    expect(join.right.estRows).toBe(4);
+    // Probing or scanning, the join yields the same rows, so its estimate holds.
     expect(join.estRows).toBe(4);
   });
 });
