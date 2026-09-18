@@ -207,10 +207,10 @@ function suggestForFilter(node: PlanNode): IndexSuggestion | null {
  */
 function suggestForJoin(node: PlanNode): IndexSuggestion | null {
   if (node.op === "NestedLoopJoin") {
-    const inner = node.right.op === "Filter" ? node.right.child : node.right;
-    const column = inner.op === "SeqScan" ? inner.schema[node.rightCol] : undefined;
-    if (inner.op === "SeqScan" && column !== undefined) {
-      return { table: inner.table, column: column.name, reason: "join" };
+    const scan = innerScan(node.right);
+    const column = scan?.schema[node.rightCol];
+    if (scan !== null && column !== undefined) {
+      return { table: scan.table, column: column.name, reason: "join" };
     }
   }
   for (const child of children(node)) {
@@ -631,8 +631,8 @@ function probeInnerSide(
   outer: { ordinal: number; label: string; rows: number },
   catalog: Catalog,
 ): PlanNode | null {
-  const scan = inner.op === "Filter" ? inner.child : inner;
-  if (scan.op !== "SeqScan") return null;
+  const scan = innerScan(inner);
+  if (scan === null) return null;
   const index = catalog.findIndex(rel.table, column);
   if (index === undefined) return null;
 
@@ -650,6 +650,19 @@ function probeInnerSide(
   };
   if (inner.op !== "Filter") return lookup;
   return { ...inner, child: lookup, estRows: Math.ceil(lookup.estRows * FILTER_SELECTIVITY) };
+}
+
+type SeqScanNode = Extract<PlanNode, { op: "SeqScan" }>;
+
+/**
+ * The full-table scan a join's inner side would do: a SeqScan, bare or under
+ * its pushed Filter. Rule 5 replaces exactly this, and `suggestIndex` offers a
+ * join index exactly when it is present, so the two cannot drift apart and the
+ * button cannot promise a plan change the planner would not make.
+ */
+function innerScan(side: PlanNode): SeqScanNode | null {
+  const scan = side.op === "Filter" ? side.child : side;
+  return scan.op === "SeqScan" ? scan : null;
 }
 
 /** Rows one index key is expected to match: `max(1, ceil(rows / distinct keys))`. */
