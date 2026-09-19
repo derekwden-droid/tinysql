@@ -681,6 +681,77 @@ h2 {
 
 }
 
+/*
+ * Phones, and windows too short for side-by-side panels: one column that
+ * scrolls as a page. The plan comes straight after the query, because watching
+ * it change is the point; the counts each index click changes sit just below
+ * it, above the rows; the schema goes last.
+ */
+@media (max-width: 700px), (max-height: 500px) {
+  #app {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: var(--pad);
+  }
+
+  /* The sample-query buttons get their own row, scrolling sideways if needed. */
+  .datasets {
+    order: 3;
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .datasets button {
+    flex: 0 0 auto;
+  }
+
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: "editor" "plan" "results" "schema";
+  }
+
+  .center {
+    display: contents;
+  }
+
+  .pane-editor {
+    grid-area: editor;
+    height: 260px;
+  }
+
+  .pane-results {
+    grid-area: results;
+  }
+
+  .pane-results > .pane-head {
+    order: -2;
+  }
+
+  .statusbar {
+    order: -1;
+    flex-wrap: wrap;
+    border-top: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .results {
+    max-height: 420px;
+  }
+
+  .panel-plan,
+  .panel-schema {
+    border-left: 0;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
