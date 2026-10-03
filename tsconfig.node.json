@@ -13,5 +13,5 @@
     "noEmit": true
   },
   "//": "Node-only view of the engine + CLI. Kept standalone (not a project reference) so `tsc --noEmit` stays a single fast pass; run it with `npx tsc -p tsconfig.node.json` to prove the engine has no DOM dependency.",
-  "include": ["src/cli", "src/engine"]
+  "include": ["src/cli", "src/engine", "src/mcp"]
 }
