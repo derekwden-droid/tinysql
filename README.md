@@ -26,7 +26,7 @@ Then open the printed URL. Three datasets load on their own, and on a first visi
 runs too, so the first screen already has a plan to read.
 
 ```bash
-npm test          # 125 tests
+npm test          # 173 tests
 npm run build     # static site in dist/
 ```
 
@@ -50,6 +50,27 @@ Add `--explain` to see the plan instead of the rows. `npm run cli -- --help` lis
 
 > The package is not published to npm, so there is no `npx tinysql`. `npm run cli --` is the
 > invocation that works in a fresh clone.
+
+## Claude Code plugin
+
+[`plugin/`](plugin) packages the same engine as a Claude Code plugin, so Claude can run SQL over
+CSV files on your machine and explain the plan it got back. It adds two MCP tools, `run_sql` and
+`describe_csv`, and a `/tinysql:explain` skill that walks through the scan, index and rerun steps
+described under [Try this](#try-this). Each call loads its CSV files into a fresh in-memory
+database, so nothing persists between calls. The server reads only `.csv` files, writes nothing,
+and never touches the network. To try it from a clone:
+
+```bash
+claude --plugin-dir ./plugin
+```
+
+The server in [`src/mcp`](src/mcp) is a hand-written JSON-RPC loop with no dependencies. It
+answers both the `initialize` handshake that current Claude Code clients send and the stateless
+2026-07-28 protocol revision. A plugin ships only its own folder, so `npm run build:plugin`
+transpiles the server, and the engine modules it imports, into `plugin/server/`: one `.mjs` file
+per module, comments kept. `tests/plugin.test.ts` fails if that copy goes stale, drives the shipped
+server over stdio, and checks the folder against the rules of Anthropic's plugin directory.
+[plugin/README.md](plugin/README.md) lists what the plugin reads, runs and sends.
 
 ## Try this
 
@@ -191,8 +212,9 @@ Single-threaded. A CSV over 20 MB or 200,000 rows is refused with a clear error.
 ## What we will never do in v1
 
 No transactions. No `UPDATE` or `DELETE`. No `LEFT JOIN` — inner equijoin only, one join per query.
-No aggregates, no `GROUP BY`, no subqueries, no `UNION`, no views. No server, no accounts, no AI
-anything. Persistence is `localStorage` for the editor text and nothing more.
+No aggregates, no `GROUP BY`, no subqueries, no `UNION`, no views. The web app has no server, no
+accounts and no AI; the Claude Code plugin is a separate local wrapper around the same engine.
+Persistence is `localStorage` for the editor text and nothing more.
 
 ## Adding a statement type
 
@@ -215,13 +237,16 @@ there are no `any` casts, and the switch statements are exhaustive.
 src/engine/   lexer, parser, planner, executor, catalog, hash index, CSV, demo data — no DOM
 src/ui/       editor, schema panel, results grid, plan view, status bar, dropzone
 src/cli/      the Node entry point
-tests/        one file per engine module, plus a golden test over the bundled CSVs
+src/mcp/      the MCP server behind the Claude Code plugin
+plugin/       the Claude Code plugin; its server/ and examples/ folders are generated
+scripts/      build-plugin.ts, which generates them
+tests/        one file per engine module, a golden test over the bundled CSVs, and the plugin's tests
 public/datasets/  employees, departments, orders
 docs/         the build specification this repo was written against
 ```
 
-`npx tsc -p tsconfig.node.json` typechecks the engine and CLI with DOM types removed, which proves
-the engine has no browser dependency.
+`npx tsc -p tsconfig.node.json` typechecks the engine, the CLI and the MCP server with DOM types
+removed, which proves none of them has a browser dependency.
 
 ## License
 
