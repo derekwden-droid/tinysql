@@ -3,6 +3,7 @@ import { createTableFromCsv, tableNameFromFile } from "../engine/csv.js";
 import { generateLargeTable, LARGE_QUERY, LARGE_ROWS, LARGE_TABLE } from "../engine/demo-data.js";
 import { formatError, isTinysqlError } from "../engine/errors.js";
 import { run, type QueryResult } from "../engine/executor.js";
+import { createIndexSql } from "../engine/format.js";
 import { parse } from "../engine/parser.js";
 import { createEditor, type EditorHandle } from "./editor.js";
 import { installDropzone } from "./dropzone.js";
@@ -319,17 +320,5 @@ function lastStatement(sql: string): string {
   } catch {
     return sql;
   }
-}
-
-/**
- * Identifiers are double-quoted so a table created with a quoted, mixed-case
- * name still resolves; for ordinary lowercase names the quotes change nothing.
- */
-function createIndexSql(table: string, column: string): string {
-  return `CREATE INDEX ${quoteIdent(`${table}_${column}`)} ON ${quoteIdent(table)} (${quoteIdent(column)});`;
-}
-
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
 }
 
