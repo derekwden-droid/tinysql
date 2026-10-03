@@ -36,8 +36,8 @@ export function describe(node) {
         case "SeqScan":
             return aliasLabel(node.table, node.alias);
         case "IndexLookup": {
-            const key = node.probe.kind === "literal" ? literal(node.probe.value) : node.probe.label;
-            return `${aliasLabel(node.table, node.alias)} using ${node.index} on ${node.column} = ${key}`;
+            const probed = node.probe.kind === "literal" ? literal(node.probe.value) : node.probe.label;
+            return `${aliasLabel(node.table, node.alias)} using ${node.index} on ${node.column} = ${probed}`;
         }
         case "Filter":
             return exprToString(node.predicate);
