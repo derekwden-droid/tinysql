@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "cli": "tsx src/cli/index.ts"
+    "cli": "tsx src/cli/index.ts",
+    "build:plugin": "tsx scripts/build-plugin.ts --write"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

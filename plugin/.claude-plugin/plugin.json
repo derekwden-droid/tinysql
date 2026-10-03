@@ -1,0 +1,18 @@
+{
+  "name": "tinysql",
+  "displayName": "TinySQL",
+  "version": "1.0.0",
+  "description": "Run SQL over local CSV files with a from-scratch engine that shows its query plan: rows read at each step, estimated vs actual counts, and the index that would turn a full scan into a lookup.",
+  "author": {
+    "name": "Derek Denmark",
+    "url": "https://github.com/derekwden-droid"
+  },
+  "homepage": "https://github.com/derekwden-droid/tinysql/tree/main/plugin",
+  "repository": "https://github.com/derekwden-droid/tinysql",
+  "license": "MIT",
+  "keywords": ["sql", "csv", "query-plan", "explain", "indexes", "databases", "learning"],
+  "icon": "./icon.png",
+  "documentationUrl": "https://github.com/derekwden-droid/tinysql/blob/main/plugin/README.md",
+  "supportUrl": "https://github.com/derekwden-droid/tinysql/issues",
+  "privacyPolicyUrl": "https://github.com/derekwden-droid/tinysql/blob/main/plugin/PRIVACY.md"
+}
