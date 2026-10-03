@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tinysql": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/mcp/server.mjs"]
+    }
+  }
+}
