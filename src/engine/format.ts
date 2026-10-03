@@ -39,3 +39,17 @@ export function formatMs(ms: number): string {
 export function pluralRows(n: number): string {
   return `${n.toLocaleString("en-US")} ${n === 1 ? "row" : "rows"}`;
 }
+
+/**
+ * The statement the UI's "Create index and rerun" button and the Claude Code
+ * plugin both offer. Identifiers are double-quoted so a table created with a
+ * quoted, mixed-case name still resolves; for ordinary lowercase names the
+ * quotes change nothing.
+ */
+export function createIndexSql(table: string, column: string): string {
+  return `CREATE INDEX ${quoteIdent(`${table}_${column}`)} ON ${quoteIdent(table)} (${quoteIdent(column)});`;
+}
+
+export function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
